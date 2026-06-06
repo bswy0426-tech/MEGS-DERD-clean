@@ -1,0 +1,11 @@
+inherit_from: configs/SimuEvent/replica_office3.yaml
+
+data:
+  output: output/depth_error/office3_noise005
+  exp_name: gaussian_rel_005
+
+depth_error_exp:
+  enable: true
+  mode: gaussian_rel
+  sigma: 0.05
+  seed: 2026

@@ -1,0 +1,11 @@
+inherit_from: configs/SimuEvent/replica_office3.yaml
+
+data:
+  output: output/depth_error/office3_dropout030
+  exp_name: dropout_030
+
+depth_error_exp:
+  enable: true
+  mode: dropout
+  dropout_ratio: 0.30
+  seed: 2026

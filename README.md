@@ -60,13 +60,25 @@ Server setup files are included for reproducibility:
 
 ## DERD-Net Depth Error Experiment
 
-`DEPTH_ERROR_EXPERIMENT.md` describes the recommended sensitivity experiment
-for the paper. The current clean runtime follows the verified DERD-Net path used
-for the reproduced TUM-VIE runs; add an explicit perturbation hook before using
-that protocol as an executable config option.
+`DEPTH_ERROR_EXPERIMENT.md` describes the sensitivity experiment for the paper.
+The depth perturbation hook is built into `main.py` and is disabled by default,
+so the verified DERD-Net path is unchanged unless `depth_error_exp.enable` is
+set to `true` in the YAML config.
+
+Example office3 depth-error runs:
+
+```bash
+python main.py --config configs/DepthError/replica_office3_clean.yaml
+python main.py --config configs/DepthError/replica_office3_noise005.yaml
+python main.py --config configs/DepthError/replica_office3_noise010.yaml
+python main.py --config configs/DepthError/replica_office3_scale090.yaml
+python main.py --config configs/DepthError/replica_office3_scale110.yaml
+python main.py --config configs/DepthError/replica_office3_dropout030.yaml
+```
 
 ## Notes
 
 - The code path is DERD-Net based.
+- Depth perturbation experiments are opt-in and leave normal runs unchanged.
 - Outputs, datasets, and pretrained weights are ignored by git.
 - The config loader expands environment variables in YAML files.

@@ -1,0 +1,11 @@
+inherit_from: configs/SimuEvent/replica_office3.yaml
+
+data:
+  output: output/depth_error/office3_scale090
+  exp_name: scale_090
+
+depth_error_exp:
+  enable: true
+  mode: scale
+  scale_factor: 0.90
+  seed: 2026

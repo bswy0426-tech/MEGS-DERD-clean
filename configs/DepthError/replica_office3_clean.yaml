@@ -1,0 +1,8 @@
+inherit_from: configs/SimuEvent/replica_office3.yaml
+
+data:
+  output: output/depth_error/office3_clean
+  exp_name: clean_derdnet
+
+depth_error_exp:
+  enable: false

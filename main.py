@@ -1,4 +1,4 @@
-﻿import os
+import os
 from derdnet_model import PixelwiseConvGRU
 import torch.nn.functional as F
 import math
@@ -376,6 +376,8 @@ class SLAM():
     #===================================================================================#
         self.depth_cache={}
         self.depth_loss_weight=self.config.get('BA',{}).get('depth_loss_weight')
+        self.depth_error_cfg = self.config.get("depth_error_exp", {"enable": False})
+        self.depth_error_counter = 0
 
         self.derdnet_model=None
         self.derdnet_cfg={
@@ -632,6 +634,56 @@ class SLAM():
         with torch.no_grad():
             pred = self.derdnet_model((norm_pixel_coords, sub_dsis))
         return pred
+
+    def apply_depth_error(self, depth_map: torch.Tensor) -> torch.Tensor:
+        """Apply optional depth-prior perturbations for robustness experiments."""
+        cfg = self.depth_error_cfg
+        if not cfg or not cfg.get("enable", False):
+            return depth_map
+
+        mode = cfg.get("mode", "clean")
+        seed = int(cfg.get("seed", 2026))
+
+        depth = depth_map.clone()
+        valid = torch.isfinite(depth) & (depth > 0)
+
+        generator = torch.Generator(device=depth.device)
+        call_idx = self.depth_error_counter
+        self.depth_error_counter += 1
+        generator.manual_seed(seed + call_idx)
+
+        if mode == "clean":
+            pass
+        elif mode == "gaussian_rel":
+            sigma = float(cfg.get("sigma", 0.05))
+            noise = torch.randn(
+                depth.shape,
+                device=depth.device,
+                dtype=depth.dtype,
+                generator=generator,
+            ) * sigma
+            depth[valid] = depth[valid] * (1.0 + noise[valid])
+        elif mode == "scale":
+            scale_factor = float(cfg.get("scale_factor", 1.0))
+            depth[valid] = depth[valid] * scale_factor
+        elif mode == "dropout":
+            dropout_ratio = float(cfg.get("dropout_ratio", 0.30))
+            keep = torch.rand(
+                depth.shape,
+                device=depth.device,
+                generator=generator,
+            ) > dropout_ratio
+            depth[valid & (~keep)] = 0.0
+        else:
+            raise ValueError(f"Unknown depth_error_exp.mode: {mode}")
+
+        depth = torch.clamp(depth, min=0.0)
+        print(
+            f"[DepthError] enable=True, mode={mode}, call={call_idx}, "
+            f"valid_pixels={valid.sum().item()}"
+        )
+        return depth
+
     def estimate_depth_map_derdnet(self, events: torch.Tensor,
                                t_start: float, t_end: float,
                                get_pose_fn=None) -> torch.Tensor:
@@ -671,9 +723,10 @@ class SLAM():
 
         if M == 0:
             print("Warning: No pixel meets min_votes threshold. Returning uniform depth.")
-            return torch.full((self.dataset.H, self.dataset.W),
-                            (self.config['mapping']['min_depth'] + self.config['mapping']['max_depth'])/2,
-                            device=self.device)
+            depth_map = torch.full((self.dataset.H, self.dataset.W),
+                                (self.config['mapping']['min_depth'] + self.config['mapping']['max_depth'])/2,
+                                device=self.device)
+            return self.apply_depth_error(depth_map)
 
         depth_map = torch.zeros((self.dataset.H, self.dataset.W), device=self.device)
         batch_size = self.derdnet_cfg['pixel_batch_size']
@@ -691,6 +744,7 @@ class SLAM():
             x = batch_pixels[:, 1]
             depth_map[y, x] = pred_center
 
+        depth_map = self.apply_depth_error(depth_map)
         return depth_map
     def get_depth_at_time(self, t, BA_batch):
         """
