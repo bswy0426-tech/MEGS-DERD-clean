@@ -4,19 +4,19 @@ dataset: 'tum_vie'
 # iteration number
 num_opti_steps_for_depthEst_init: 4501
 num_opti_steps_for_init: 4501
-num_opti_steps_for_tracking: 201
+num_opti_steps_for_tracking: 301
 num_opti_steps_for_BA: 1501
 num_opti_steps_for_global_BA: 2501
 num_opti_steps_for_final_global_BA: 4501
 
 refine_img_rendering_: False
-sliding_window_sz: 25
+sliding_window_sz: 20
 num_events_window_for_init: 600000
 num_events_window_for_tracking: 1000000
 num_events_window_for_BA: 1000000
 num_events_window_for_BA_random: 1500000
 pose_lr: 0.0001
-
+sliding_window_sz: 20
 
 use_linLog: True
 save_model: False
@@ -40,10 +40,21 @@ use_mask_event_loss: True
 mask_event_loss_weight: 1.0
 
 # 0: use absolute pose; 1: use relative pose from individual frame;  2: fix the first pose and use relative pose from it
-use_relative_pose_to_opt: 0 
+use_relative_pose_to_opt: 0
+#depth estimation with derdnet
+derdnet_model_path: "${DERDNET_MODEL_PATH}"
+derdnet_sub_radius_h: 3
+derdnet_sub_radius_w: 3
+derdnet_multi_pixel: false
+derdnet_num_depth_bins: 64
+derdnet_event_batch_size: 50000
+derdnet_pixel_batch_size: 1024
+derdnet_min_votes: 5
+derdnet_median_filter: False
 
-# depth estimation
-depth_estimation_init: 1 #0: don't use depth; 1: estimate depth during initialization; 2: use pre-estimated depth
+debug_save_dsi: True
+debug_save_depth: false
+depth_estimation_init: 1
 only_track_event_area: False
 use_gt_pose_to_opt: False
 opt_pose: True
@@ -65,13 +76,16 @@ data:
   downsample_factor: 1
   training_start_index: 90 # the size of training data depends on your computer memory size
   training_end_index: 130 # -1 for the last index
-  num_frames_for_init: 3
+  #num_frames_for_init: 6
   upsample_ts_factor: 1    #if upsample_ts_factor=2, [t1, t2] => [t1, (t1+t2)/2, t2], denoted as [t1, t2, t3]
   interval_selection: 1
 
 mapping:
   bounding_size: 3.0 # very sensitive
   # densification
+  min_depth: 0.0001
+  max_depth: 100.0
+  depth_scale: 1.0
   prune_opa: 0.1 # GSs with opacity below this value will be pruned
   refine_start_iter: 1500 # Start refining GSs after this iteration
   refine_every: 500 # Refine GSs every this steps
@@ -86,7 +100,7 @@ mapping:
   grow_grad2d: 0.000005
   grow_scale3d: 0.01
   prune_scale3d: 0.1
-  
+
   use_median_filter: False
   use_white_balance_loss: True
 
@@ -94,21 +108,20 @@ loss:
   norm_eve_loss: True
 
 initialization:
-  num_frames_for_init: 3  # use how many frames event data in the initial
+  num_frames_for_init: 6  # use how many frames event data in the initial
   incre_sampling_seg_num_expected: 50
-  min_n_winsize: 500000
-  max_n_winsize: 1000000
+  min_n_winsize: 80000
+  max_n_winsize: 400100
   training_batch_size: 5 #depends your GPU memory size
   visualize_every_iter: 100
   visualize_intermediate_img: True
   gaussian_init_sfm_mask: 2 # 0 for using depth map mask; 1 for using event map mask; 2 for both
   gaussian_num_sfm: 50000
   retain_pose: False
-
 BA:
   incre_sampling_seg_num_expected: 100
-  min_n_winsize: 500000
-  max_n_winsize: 1000000
+  min_n_winsize: 80000
+  max_n_winsize: 400100
   training_batch_size: 5 #depends your GPU memory size
   visualize_every_iter: 500
   visualize_intermediate_img: False
@@ -117,6 +130,12 @@ BA:
   refine_stop_iter: 1000
   refine_every: 250
 
+  depth_supervision: True
+  depth_loss_weight: 0.0001
+  depth_loss_type: 'l1'
+  depth_learn_scale: True
+
+  depth_scale_lr: 0.001
 entropyloss:
   N_rand: 6144
   entropy_type: log2
@@ -128,7 +147,7 @@ entropyloss:
   N_entropy: 500
 
 event:
-  window_ts_us: 2000
+  window_ts_us: 10000
   use_manual_N_window: True
   N_window: 1000000
   N_window_tracking: 5000
@@ -155,7 +174,7 @@ visualization:
 
 tracking:
   iter: 400
-  pose_lr: 0.001
+  pose_lr: 0.0005
   render_gt_img: True
   render_novel_views: False
   use_init_checkpoint: True

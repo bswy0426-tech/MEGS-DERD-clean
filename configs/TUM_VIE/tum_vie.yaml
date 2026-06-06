@@ -28,7 +28,7 @@ opt_pose: True
 initOnly: False
 
 # 0: use absolute pose; 1: use relative pose from individual frame;  2: fix the first pose and use relative pose from it
-use_relative_pose_to_opt: 0 
+use_relative_pose_to_opt: 0
 
 # depth estimation
 depth_estimation_init: 0 #0: Don't use depth initialization; 1: Estimate depth during initialization; 2: Use pre-estimated depth

@@ -69,13 +69,6 @@ derdnet_median_filter: false
 debug_save_dsi: false
 debug_save_depth: false
 
-depth_error_exp:
-  enable: false
-  mode: none
-  sigma: 0.1
-  scale_factor: 1.0
-  dropout_ratio: 0.3
-
 data:
   downsample: 1
   sc_factor: 1

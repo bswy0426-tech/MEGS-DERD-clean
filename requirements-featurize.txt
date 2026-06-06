@@ -1,23 +1,51 @@
-# Featurize/runtime dependency overlay for MEGS-DERD.
+# Featurize runtime reference list for MEGS-DERD.
+#
+# Do not blindly run `pip install -r requirements-featurize.txt` on a working
+# Featurize image. The server usually already has PyTorch/CUDA installed, and
+# a full reinstall may replace torch or NumPy. Use this file as a checklist and
+# install only the missing packages reported by Python.
+#
 # Keep NumPy below 2 because the preinstalled PyTorch/CUDA stack may be
 # compiled against NumPy 1.x.
 numpy==1.26.4
 
 # Runtime utilities
+colorama
+cycler
+fonttools
+fvcore
+iopath
 imageio
 imageio-ffmpeg
-opencv-python
+kiwisolver
+matplotlib
+opencv-python-headless==4.8.1.78
+packaging
+Pillow
+portalocker
+pyparsing
+python-dateutil
 PyYAML
 tqdm
-matplotlib
 scipy
 scikit-image
-Pillow
+scikit-learn
+setuptools
+six
+tabulate
+termcolor
+trimesh
+typing_extensions
+yacs
 lpips
 h5py
 hdf5plugin
 
 # Geometry / optimization utilities
+pypose
 plyfile
 numba
 torchgeometry
+kornia
+jaxtyping
+pytorch-msssim

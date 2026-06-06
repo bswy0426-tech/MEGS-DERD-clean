@@ -19,9 +19,17 @@ modules = [
     "tqdm",
     "scipy",
     "skimage",
+    "sklearn",
     "lpips",
     "h5py",
     "hdf5plugin",
+    "trimesh",
+    "kornia",
+    "jaxtyping",
+    "pytorch_msssim",
+    "plyfile",
+    "numba",
+    "torchgeometry",
 ]
 
 for name in modules:

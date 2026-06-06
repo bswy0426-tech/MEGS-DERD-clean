@@ -19,6 +19,7 @@ dependencies:
       - matplotlib
       - scipy
       - scikit-image
+      - scikit-learn
       - Pillow
       - lpips
       - h5py
@@ -27,3 +28,7 @@ dependencies:
       - plyfile
       - numba
       - torchgeometry
+      - trimesh
+      - kornia
+      - jaxtyping
+      - pytorch-msssim

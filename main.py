@@ -1,11 +1,10 @@
-import sys
-import os
-
+﻿import os
 from derdnet_model import PixelwiseConvGRU
 import torch.nn.functional as F
 import math
 from typing import Optional,Tuple
 
+#============================================================#
 # Package imports
 import torch
 import torch.optim as optim
@@ -34,7 +33,6 @@ from optimization.utils import at_to_transform_matrix, qt_to_transform_matrix, m
 from spline.spline import SE3_to_se3, se3_to_SE3, se3_to_SE3_m44
 
 from datasets.dataset import get_event_chunk
-# from gaussian_splatting.arguments import ModelParams, PipelineParams, OptimizationParams
 from datasets.utils import get_camera_rays
 from datasets.dataset import get_event_chunk
 
@@ -52,8 +50,6 @@ from spline.spline_functor import linear_interpolation, cubic_bspline_interpolat
 
 from torchvision.transforms import v2
 from colormaps import apply_colormap
-# from img_evaluation import compute_img_metric
-
 from tikhonov_regularizor import tikhonov_regularization
 from loss_utils import compute_white_balance_loss, compute_ssim_loss
 
@@ -64,7 +60,6 @@ import math
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, add_new_gs
 from dataclasses import dataclass, field
-# import tyro
 from torch import Tensor
 from plyfile import PlyData, PlyElement
 from utils import BasicPointCloud
@@ -91,7 +86,7 @@ to8b = lambda x: (255 * np.clip(x, 0, 1)).astype(np.uint8)
 
 def lin_log(color, linlog_thres=1):
     """
-    Input: 
+    Input:
     :color torch.Tensor of (N_rand_events, 1 or 3). 1 if use_luma, else 3 (rgb).
            We pass rgb here, if we want to treat r,g,b separately in the loss (each pixel must obey event constraint).
     """
@@ -252,13 +247,23 @@ def pcd_2_gs(
             feature_dim: Optional[int] = None,
             device: str = "cuda",
     ) -> torch.nn.ParameterDict:
-    
+
+    if points is None or points.shape[0] == 0:
+        raise ValueError("Input points is empty")
+
+    valid_mask = torch.isfinite(points).all(dim=1)
+    if not valid_mask.all():
+        print(f"[pcd_2_gs] Filtering { (~valid_mask).sum().item() } invalid points")
+        points = points[valid_mask]
+        if points.shape[0] == 0:
+            raise ValueError("All points are invalid after filtering")
+
     points = points # pcd
     pnum = points.shape[0]
     rgbs = torch.rand((pnum, 3))
-    
+
     N = points.shape[0]
-    
+
     # Initialize the GS size to be the average dist of the 3 nearest neighbors
     dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
     dist_avg = torch.sqrt(dist2_avg)
@@ -288,7 +293,7 @@ def pcd_2_gs(
         params.append(("colors", torch.nn.Parameter(colors), 2.5e-3))
 
     splats = torch.nn.ParameterDict({n: v for n, v, _ in params}).to(device)
-    
+
     return splats
 
 def create_splats_with_optimizers(
@@ -305,11 +310,9 @@ def create_splats_with_optimizers(
     device: str = "cuda",
     points: Optional[Tensor] = None,
 ) -> Tuple[torch.nn.ParameterDict, Dict[str, torch.optim.Optimizer]]:
-    
+
     if init_type == "sfm":
         print("***** Gaussion init_type: sfm *****")
-        # points = torch.from_numpy(parser.points).float()
-        # rgbs = torch.from_numpy(parser.points_rgb / 255.0).float()
         points = points
         pnum = points.shape[0]
         rgbs = torch.rand((pnum, 3))
@@ -319,7 +322,7 @@ def create_splats_with_optimizers(
         rgbs = torch.rand((init_num_pts, 3))
     else:
         raise ValueError("Please specify a correct init_type: sfm or random")
-    
+
     N = points.shape[0]
     # Initialize the GS size to be the average dist of the 3 nearest neighbors
     dist2_avg = (knn(points, 4)[:, 1:] ** 2).mean(dim=-1)  # [N,]
@@ -380,29 +383,25 @@ class SLAM():
             'sub_radius_w': self.config.get('derdnet_sub_radius_w', 3),
             'num_depth_bins': self.config.get('derdnet_num_depth_bins', 64),
             'multi_pixel': self.config.get('derdnet_multi_pixel', False),
-            'event_batch_size': self.config.get('derdnet_event_batch_size', 50000),   # 构建DSI时的事件分批大小
-            'pixel_batch_size': self.config.get('derdnet_pixel_batch_size', 1024),    # 推理时的像素分批大小
-            'min_votes': self.config.get('derdnet_min_votes', 5),                     # 只推理投票数超过该阈值的像素
+            'event_batch_size': self.config.get('derdnet_event_batch_size', 50000),
+            'pixel_batch_size': self.config.get('derdnet_pixel_batch_size', 1024),
+            'min_votes': self.config.get('derdnet_min_votes', 5),
         }
         print("derdnet model loaded successfully")
     #===================================================================================#
         self.dataset = get_dataset(config)
-        
+
         self.create_pose_data()
-        
-        # self.gs_dataset_cfg = gs_dataset_cfg
-        # self.gs_opt_cfg = gs_opt_cfg
-        # self.gs_pipe_cfg = gs_pipe_cfg
 
         self.control_knot_poses = None
         self.control_knot_ts = None
-        self.control_knot_delta_t = 0.15 # create control knot every 5 frames 
+        self.control_knot_delta_t = 0.15 # create control knot every 5 frames
 
         self.events_for_tracking = None
-        self.events_for_BA = [] 
-        
+        self.events_for_BA = []
+
         self.gs_cfg = Config()
-        
+
         self.scene_scale = self.config["mapping"]["bounding_size"]
         print("Scene scale(or size of bounding box):", self.scene_scale)
         # Model
@@ -421,21 +420,16 @@ class SLAM():
             device=self.device,
         )
         print("Model initialized. Number of GS:", len(self.splats["means"]))
-        
+
         # TODO: make this as a configurable parameter
         self.median_filter = MedianPool2d(kernel_size=5, same=True)
         self.median_filter_dvs = MedianPool2d(kernel_size=5, same=True)
-        
+
         height = 480
         width = 640
-        # mask = np.zeros((height, width), dtype=np.uint8)
-        # radius = 325
-        # center = (width // 2-15, height // 2)
-        # cv2.circle(mask, center, radius, (1), -1)
         mask = np.ones((height, width), dtype=np.uint8)
         self.vector_mask = torch.from_numpy(mask).float().cuda()
-        
-        # self.scene_extent = None
+
         self.color_mask = np.zeros((self.dataset.H, self.dataset.W, 3))
 
         if self.config["mapping"]["color_channels"]==3:
@@ -448,28 +442,22 @@ class SLAM():
         else:
             self.color_mask[...] = 1
 
-        # self.color_mask = self.color_mask.reshape((-1, 3))
         self.color_mask = torch.from_numpy(self.color_mask).float().cuda()
-        #======================================#
-        #self._depth_counter=0
         self.debug_save_dsi=self.config.get('debug_save_dsi',False)
         self.debug_save_depth=self.config.get('debug_save_depth',False)
         self._depth_counter = 0
 		#======================================#
         print('CoSLAM finished initialization...\n')
-
     def load_derdnet_model(self):
-        from derdnet_model import PixelwiseConvGRU  # 确保导入正确
+        from derdnet_model import PixelwiseConvGRU
 
         model_path = self.config.get('derdnet_model_path')
         if not model_path or not os.path.exists(model_path):
             raise FileNotFoundError(f"DERD-Net model not found at {model_path}")
 
-        # 从配置读取参数
         sub_r_h = self.derdnet_cfg['sub_radius_h']
         sub_r_w = self.derdnet_cfg['sub_radius_w']
         multi_pixel = self.derdnet_cfg['multi_pixel']
-        # 如果需要使用像素位置，可以设置 use_pixel_pos=True，但默认 False
         use_pixel_pos = self.config.get('derdnet_use_pixel_pos', False)
 
         self.derdnet_model = PixelwiseConvGRU(
@@ -479,28 +467,23 @@ class SLAM():
             use_pixel_pos=use_pixel_pos
         ).to(self.device)
 
-        # 加载权重
         ckpt = torch.load(model_path, map_location=self.device)
         if 'model_state_dict' in ckpt:
             state_dict = ckpt['model_state_dict']
         else:
-            state_dict = ckpt  # 假设直接是state_dict
+            state_dict = ckpt
 
         self.derdnet_model.load_state_dict(state_dict)
         self.derdnet_model.eval()
         print("DERD-Net loaded successfully.")
-
     def get_pose_at_t(self, t: float) -> torch.Tensor:
         """
-        根据控制点线性插值得到时刻 t 的 c2w 矩阵 (4x4)
         """
-        # 获取排序后的控制点
         if not hasattr(self, '_sorted_ctrl_knots'):
-            # 按时间戳排序
             sorted_items = sorted(self.ctrl_knot_ts_all.items(), key=lambda x: x[1])
             self._sorted_ctrl_ts = [item[1] for item in sorted_items]
             self._sorted_ctrl_se3 = torch.stack([self.ctrl_knot_se3_all[item[0]] for item in sorted_items]).to(self.device)
-        
+
         ts = self._sorted_ctrl_ts
         se3 = self._sorted_ctrl_se3
 
@@ -509,16 +492,15 @@ class SLAM():
         if t >= ts[-1]:
             return se3[-1].Exp().matrix()
 
-        # 二分查找
         idx = torch.searchsorted(torch.tensor(ts, device=self.device), t) - 1
         idx = idx.item()
         t0, t1 = ts[idx], ts[idx+1]
         alpha = (t - t0) / (t1 - t0)
         se3_interp = (1 - alpha) * se3[idx] + alpha * se3[idx+1]
         return se3_interp.Exp().matrix()
-    
+
     #===========================================================================#
-    def build_dsi_vectorized(self, events: torch.Tensor, 
+    def build_dsi_vectorized(self, events: torch.Tensor,
                          depth_range: Tuple[float, float],
                          num_depth_bins: int,
                          keyframe_pose: Optional[torch.Tensor] = None,
@@ -528,22 +510,17 @@ class SLAM():
         events: [N, 4] (x, y, t, p)
         depth_range: (d_min, d_max)
         num_depth_bins: int
-        keyframe_pose: 参考帧位姿 (4x4 c2w)，若 None 则设为 Identity
-        event_batch_size: 每批事件数量
-        get_pose_fn: 输入时间 t，返回 c2w 矩阵 [4,4] 的函数。若 None，则假设相机静止（无运动补偿）
-        返回 DSI: [H, W, num_depth_bins]
         """
         H, W = self.dataset.H, self.dataset.W
         K = torch.tensor([[self.dataset.fx, 0, self.dataset.cx],
                         [0, self.dataset.fy, self.dataset.cy],
                         [0, 0, 1]], device=self.device, dtype=torch.float32)
-        
+
         d_min, d_max = depth_range
         depth_vals = torch.linspace(d_min, d_max, num_depth_bins, device=self.device)  # [D]
 
-        # 确定参考帧位姿
         if keyframe_pose is None:
-            keyframe_pose = torch.eye(4, device=self.device)  # 默认为 Identity
+            keyframe_pose = torch.eye(4, device=self.device)
         key_R = keyframe_pose[:3, :3]  # [3,3]
         key_t = keyframe_pose[:3, 3]   # [3]
 
@@ -568,11 +545,9 @@ class SLAM():
             B = x.shape[0]
 
             if get_pose_fn is None:
-                # 无运动补偿：假设相机静止，世界点 = 相机点
                 R_ev = torch.eye(3, device=self.device).unsqueeze(0).expand(B, 3, 3)
                 t_ev = torch.zeros(B, 3, device=self.device)
             else:
-                # 有运动补偿：获取每个事件时刻的位姿（去重优化）
                 unique_t, inverse_idx = torch.unique(t, return_inverse=True)
                 poses_w2c = torch.stack([torch.inverse(get_pose_fn(ti)) for ti in unique_t])  # [U,4,4]
                 R_w2c = poses_w2c[:, :3, :3]  # [U,3,3]
@@ -580,34 +555,26 @@ class SLAM():
                 R_ev = R_w2c[inverse_idx]      # [B,3,3]
                 t_ev = t_w2c[inverse_idx]      # [B,3]
 
-            # 计算归一化相机坐标
             pix_homo = torch.stack([x.float(), y.float(), torch.ones_like(x)], dim=1)  # [B,3]
             ray_cam = torch.matmul(K_inv, pix_homo.T).T  # [B,3]
 
-            # 为每个事件生成所有深度层上的相机坐标点 [B, D, 3]
             pt_cam = ray_cam.unsqueeze(1) * depth_vals.unsqueeze(0).unsqueeze(2)
 
             if get_pose_fn is None:
-                # 无运动补偿：世界点 = 相机点
                 pt_world = pt_cam
             else:
-                # 有运动补偿：变换到世界坐标系
                 pt_world = torch.einsum('bij,bdj->bdi', R_ev, pt_cam) + t_ev.unsqueeze(1)
 
-            # 投影到参考帧相机坐标系
             pt_ref_cam = torch.einsum('ij,bdj->bdi', key_R.T, pt_world - key_t)
 
-            # 保留 Z>0 的点
             valid_z = pt_ref_cam[..., 2] > 0
 
-            # 投影到像素
             u = (K[0,0] * pt_ref_cam[..., 0] / pt_ref_cam[..., 2] + K[0,2]).long()
             v = (K[1,1] * pt_ref_cam[..., 1] / pt_ref_cam[..., 2] + K[1,2]).long()
 
             valid_uv = (u >= 0) & (u < W) & (v >= 0) & (v < H)
             valid_mask = valid_z & valid_uv
 
-            # 获取有效索引
             v_flat = v[valid_mask]
             u_flat = u[valid_mask]
             d_idx = torch.where(valid_mask)[1]
@@ -622,9 +589,7 @@ class SLAM():
     def extract_sub_dsis_batch(self, dsi: torch.Tensor, pixel_coords: torch.Tensor):
         """
         dsi: [H, W, D]
-        pixel_coords: [M, 2] (y, x)  # 原始像素坐标（整数）
-        返回:
-            norm_pixel_coords: [M, 2] 归一化像素坐标（范围 [-1,1] 或 [0,1]）
+        pixel_coords: [M, 2] (y, x)
             sub_dsis: [M, D, sub_h, sub_w]
         """
         sub_r = self.derdnet_cfg['sub_radius_h']
@@ -632,12 +597,10 @@ class SLAM():
         H, W, D = dsi.shape
         M = pixel_coords.shape[0]
 
-        # 归一化像素坐标到 [-1, 1]（常用）
         norm_y = (pixel_coords[:, 0].float() / (H-1)) * 2 - 1
         norm_x = (pixel_coords[:, 1].float() / (W-1)) * 2 - 1
         norm_pixel_coords = torch.stack([norm_x, norm_y], dim=1)  # [M,2]
 
-        # 生成窗口偏移
         offsets = torch.stack(torch.meshgrid(
             torch.arange(-sub_r, sub_r+1, device=self.device),
             torch.arange(-sub_r, sub_r+1, device=self.device),
@@ -665,102 +628,40 @@ class SLAM():
         """
         norm_pixel_coords: [M, 2]
         sub_dsis: [M, D, sub_h, sub_w]
-        返回: [M, 1] 或 [M, 9]
         """
         with torch.no_grad():
-            # 如果 use_pixel_pos=False，模型内部可能不会使用 pixel_position，但仍需传入
             pred = self.derdnet_model((norm_pixel_coords, sub_dsis))
         return pred
-    #===========================================================================#
-    # def estimate_depth_from_events(self,event_stream):
-    #     import numpy as np
-    #     H,W=self.dataset.H,self.dataset.W
-    #     if event_stream.is_cuda:
-    #         event_cpu=event_stream.cpu().numpy()
-    #     else:
-    #         event_cpu=event_stream.numpy()
-    #     # if (event_cpu[:,0].min() > 480 and event_cpu[:,0].max() < 768 and
-    #     #     event_cpu[:,1].min() >= 0 and event_cpu[:,1].max() < 480):
-    #     #     print("Detected column order [x, y, t, p], reordering to [y, x, t, p]")
-    #     #     event_cpu = np.stack([event_cpu[:,1], event_cpu[:,0], event_cpu[:,2], event_cpu[:,3]], axis=1)
-            
-    #     voxel=events_to_voxel_grid_pytorch(event_cpu,num_bins,W,H,self.device)
-    #     voxel=voxel.unsqueeze(0)
-    #     with torch.no_grad():
-    #         voxel=self.depth_preprocessor(voxel)
-    #             output,_=self.depth_model(voxel,None)
-    #         else:
-    #             output,_=self.depth_model(voxel)
-    #         # depth_raw=output[0,0].cpu().numpy()
-    #         depth_raw=output[0,0]
-    #     # if reg is not None:
-    #     #     depth_linear=np.exp(reg*(depth_raw-1.0))
-    #     # else:
-    #     #     depth_linear=depth_raw
-    #     # depth_linear=np.clip(depth_linear,1e-6,1e3)
-
-    #     print(f"[Depth] raw: min={depth_raw.min():.3f}, max={depth_raw.max():.3f}, mean={depth_raw.mean():.3f}")
-    #     # print(f"[Depth] linear: min={depth_linear.min():.3f}, max={depth_linear.max():.3f}, mean={depth_linear.mean():.3f}")
-
-    #     # depth_tensor=torch.from_numpy(depth_raw).float().to(self.device)
-    #     # # 在 estimate_depth_from_events 返回前添加
-    #     # save_dir = os.path.join(self.config["data"]["output"], self.config["data"]["exp_name"], "depth_debug")
-    #     # os.makedirs(save_dir, exist_ok=True)
-    #     # np.save(os.path.join(save_dir, f"depth_{self._depth_counter}.npy"), depth_raw)
-    #     # self._depth_counter = getattr(self, '_depth_counter', 0) + 1
-    #     #self._depth_counter+=1
-    #     print(f"Event x range: {event_cpu[:,0].min()} - {event_cpu[:,0].max()}, y range: {event_cpu[:,1].min()} - {event_cpu[:,1].max()}")
-    #     # return depth_tensor
-    #     return depth_raw
-    def apply_depth_error(self, depth_map: torch.Tensor) -> torch.Tensor:
-        cfg = self.config.get("depth_error_exp", {})
-        if not cfg.get("enable", False):
-            return depth_map
-
-        min_depth = self.config["mapping"]["min_depth"]
-        max_depth = self.config["mapping"]["max_depth"]
-        depth = depth_map.clone()
-        valid = torch.isfinite(depth) & (depth > min_depth) & (depth < max_depth)
-        mode = cfg.get("mode", "none")
-
-        if mode == "gaussian_rel":
-            sigma = float(cfg.get("sigma", 0.1))
-            noise = torch.randn_like(depth)
-            depth[valid] = depth[valid] * (1.0 + sigma * noise[valid])
-        elif mode == "scale":
-            depth[valid] = depth[valid] * float(cfg.get("scale_factor", 1.0))
-        elif mode == "dropout":
-            ratio = float(cfg.get("dropout_ratio", 0.3))
-            drop_mask = torch.rand_like(depth) < ratio
-            depth[valid & drop_mask] = 0.0
-        elif mode not in ("none", None):
-            raise ValueError(f"Unknown depth_error_exp.mode: {mode}")
-
-        return torch.clamp(depth, min=min_depth, max=max_depth)
-
-    def estimate_depth_map_derdnet(self, events: torch.Tensor, 
+    def estimate_depth_map_derdnet(self, events: torch.Tensor,
                                t_start: float, t_end: float,
                                get_pose_fn=None) -> torch.Tensor:
         """
-        从事件流估计深度图
         events: [N,4]
-        t_start, t_end: 事件时间段（仅用于日志）
-        get_pose_fn: 位姿插值函数，若 None 则使用无运动补偿模式
-        返回深度图 [H, W]
         """
         print(f"Estimating depth with DERD-Net using {events.shape[0]} events...")
 
-        # 1. 构建 DSI
         dsi = self.build_dsi_vectorized(
             events,
             depth_range=(self.config['mapping']['min_depth'], self.config['mapping']['max_depth']),
             num_depth_bins=self.derdnet_cfg['num_depth_bins'],
-            keyframe_pose=None,          # 设为 Identity
+            keyframe_pose=None,
             event_batch_size=self.derdnet_cfg['event_batch_size'],
             get_pose_fn=get_pose_fn
         )
+        #===============================================================================================#
+        if self.debug_save_dsi:
+            import os
+            import numpy as np
+            save_dir = os.path.join(self.config["data"]["output"], self.config["data"]["exp_name"], "dsi_debug")
+            os.makedirs(save_dir, exist_ok=True)
+            t_min = events[:, 2].min().item()
+            t_max = events[:, 2].max().item()
+            filename = f"dsi_{t_min:.6f}_{t_max:.6f}_{events.shape[0]}.npy"
+            dsi_cpu = dsi.detach().cpu().numpy()   # [H, W, D]
+            np.save(os.path.join(save_dir, filename), dsi_cpu)
+            print(f"[Debug] DSI saved to {os.path.join(save_dir, filename)}")
+        #===============================================================================================#
 
-        # 2. 确定要推理的像素（投票数 > min_votes）
         votes = dsi.sum(dim=-1)  # [H, W]
         mask = votes > self.derdnet_cfg['min_votes']
         y_coords, x_coords = torch.where(mask)
@@ -770,21 +671,19 @@ class SLAM():
 
         if M == 0:
             print("Warning: No pixel meets min_votes threshold. Returning uniform depth.")
-            depth_map = torch.full((self.dataset.H, self.dataset.W), 
-                                (self.config['mapping']['min_depth'] + self.config['mapping']['max_depth'])/2,
-                                device=self.device)
-            return self.apply_depth_error(depth_map)
+            return torch.full((self.dataset.H, self.dataset.W),
+                            (self.config['mapping']['min_depth'] + self.config['mapping']['max_depth'])/2,
+                            device=self.device)
 
-        # 3. 分批提取 Sub-DSI 并推理
         depth_map = torch.zeros((self.dataset.H, self.dataset.W), device=self.device)
         batch_size = self.derdnet_cfg['pixel_batch_size']
         for i in range(0, M, batch_size):
             batch_pixels = pixel_coords[i:i+batch_size]
             norm_coords, sub_dsis = self.extract_sub_dsis_batch(dsi, batch_pixels)
-            pred = self.batch_infer_derdnet(norm_coords, sub_dsis)  # [B, 1] 或 [B,9]
+            pred = self.batch_infer_derdnet(norm_coords, sub_dsis)
 
             if self.derdnet_cfg['multi_pixel']:
-                pred_center = pred[:, 4]  # 假设多像素输出 9 个值，中心索引 4
+                pred_center = pred[:, 4]
             else:
                 pred_center = pred.squeeze(-1)
 
@@ -792,52 +691,31 @@ class SLAM():
             x = batch_pixels[:, 1]
             depth_map[y, x] = pred_center
 
-        return self.apply_depth_error(depth_map)
-#==============================================================================================#
-    # def get_depth_at_time(self,t,BA_batch):
-    #     frame_ts=[batch['pose_ts'].item() for batch in BA_batch]
-    #     closest_idx=min(range(len(frame_ts)),key=lambda i: abs(frame_ts[i]-t))
-    #     closest_ts=frame_ts[closest_idx]
-    #     if closest_ts in self.depth_cache:
-    #         return self.depth_cache[closest_ts]
-    #     events=BA_batch[closest_idx]['events'].squeeze().to(self.device)
-    #     depth=self.estimate_depth_from_events(events)
-    #     self.depth_cache[closest_ts]=depth
-    #     return depth
+        return depth_map
     def get_depth_at_time(self, t, BA_batch):
         """
-        根据时间 t 获取对应的深度图。
-        在 BA_batch 中找到时间最接近的帧，使用该帧的事件流通过 DERD-Net 估计深度。
-        结果会被缓存，避免重复估计同一帧。
         """
-        # 获取所有帧的时间戳
         frame_ts = [batch['pose_ts'].item() for batch in BA_batch]
-        # 找到最接近 t 的帧索引
         closest_idx = min(range(len(frame_ts)), key=lambda i: abs(frame_ts[i] - t))
         closest_ts = frame_ts[closest_idx]
 
-        # 如果已经缓存，直接返回
         if closest_ts in self.depth_cache:
             return self.depth_cache[closest_ts]
 
-        # 获取该帧的事件流
         events = BA_batch[closest_idx]['events'].squeeze().to(self.device)
 
-        # 确保 DERD-Net 模型已加载
         if self.derdnet_model is None:
             self.load_derdnet_model()
 
-        # 使用 DERD-Net 估计深度图（无运动补偿）
         t_start = events[:, 2].min()
         t_end = events[:, 2].max()
         depth = self.estimate_depth_map_derdnet(
             events,
             t_start,
             t_end,
-            get_pose_fn=None  # BA 过程中暂不使用运动补偿，简化且可缓存
+            get_pose_fn=None
         )
 
-        # 存入缓存
         self.depth_cache[closest_ts] = depth
         return depth
 #==============================================================================================#
@@ -863,7 +741,7 @@ class SLAM():
 
         xyz = self.splats["means"].detach().cpu().numpy()
         normals = np.zeros_like(xyz)
-        
+
         # copy sh0 and shN
         sh0_cp = self.splats["sh0"].detach()
         shN_cp = self.splats["shN"].detach()
@@ -871,7 +749,7 @@ class SLAM():
         sh0_cp[:,:,2] = sh0_cp[:,:,0]
         shN_cp[:,:,1] = shN_cp[:,:,0]
         shN_cp[:,:,2] = shN_cp[:,:,0]
-        
+
         f_dc = sh0_cp.transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         f_rest = shN_cp.transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         opacities = self.splats["opacities"].detach().unsqueeze(-1).cpu().numpy()
@@ -896,7 +774,7 @@ class SLAM():
         self.ctrl_knot_se3_all = {}
         self.ctrl_knot_ts_all = {}
         self.load_gt_pose()
-    
+
     def load_gt_pose(self):
         '''
         Load the ground truth pose
@@ -904,146 +782,28 @@ class SLAM():
         self.pose_gt = {}
         for i, pose in enumerate(self.dataset.poses):
             self.pose_gt[self.dataset.frame_ids[i]] = pose
-    
-    # def render_with_gsplat(self, gaussians : GaussianModel, T_cam2wld_se3, bRenderDepth=False, nOutputChannel = 1, render_tumvie_rgb = False):
-    #     if render_tumvie_rgb and self.config["dataset"]=="tum_vie":
-    #         focal_y = self.dataset.fy_rgb
-    #         focal_x = self.dataset.fx_rgb
-    #         cx = self.dataset.cx_rgb
-    #         cy = self.dataset.cy_rgb
-    #         # focal_y = self.dataset.fy 
-    #         # focal_x = self.dataset.fx 
-    #         # cx = self.dataset.cx
-    #         # cy = self.dataset.cy
-    #         image_width = self.dataset.W_rgb
-    #         image_height = self.dataset.H_rgb
-    #         T_cam2wld_SE3_pp = T_cam2wld_se3.Exp()
-    #         T_evCam_rgbCam_raw = self.dataset.T_evCam_rgbCam[0]
-            
-    #         # estimate the scale
-    #         save_path = os.path.join(self.config["data"]["output"], self.config["data"]["exp_name"])
-    #         scale = align_and_est_scale(self.pose_gt, self.est_c2w_data, 1, save_path, "pose", f"estimate_scale")
-    #         T_evCam_rgbCam_raw[:3, 3] /= scale
-            
-    #         T_evCam_rgbCam = T_evCam_rgbCam_raw.copy()
-    #         T_evCam_rgbCam_SE3_pp = pp.mat2SE3(torch.from_numpy(T_evCam_rgbCam)).float()
-    #         T_rgbcam2wld_SE3_pp = T_evCam_rgbCam_SE3_pp.Inv() * T_cam2wld_SE3_pp
-            
-    #         T_cam2wld_se3 = T_rgbcam2wld_SE3_pp.Log()
-    #     else:
-    #         focal_y = self.dataset.fy 
-    #         focal_x = self.dataset.fx 
-    #         cx = self.dataset.cx
-    #         cy = self.dataset.cy
-    #         image_width = self.dataset.W
-    #         image_height = self.dataset.H
 
-    #     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    #     screenspace_points = torch.zeros_like(gaussians.get_xyz, dtype=gaussians.get_xyz.dtype, requires_grad=True, device="cuda") + 0
-    #     try:
-    #         screenspace_points.retain_grad()
-    #     except:
-    #         pass
-    
-    #     T_c2w_Rt = torch.eye(4, device=self.device)
-    #     T_c2w_Rt[:3,:4] = se3_to_SE3(T_cam2wld_se3)
-    #     T_w2c_Rt = torch.linalg.inv(T_c2w_Rt)
-
-    #     BLOCK_X, BLOCK_Y = 16, 16
-        
-    #     tile_bounds = (
-    #         (image_width + BLOCK_X - 1) // BLOCK_X,
-    #         (image_height + BLOCK_Y - 1) // BLOCK_Y,
-    #         1,
-    #     )
-
-    #     xys, depths, radii, conics, _, num_tiles_hit, cov3d = ProjectGaussians.apply(
-    #             gaussians._xyz,
-    #             gaussians.get_scaling,
-    #             1,
-    #             gaussians._rotation,
-    #             T_w2c_Rt,
-    #             None, 
-    #             focal_x,
-    #             focal_y,
-    #             cx,
-    #             cy,
-    #             image_height,
-    #             image_width,
-    #             tile_bounds,
-    #         )
-    #     torch.cuda.synchronize()
-
-    #     shs_view = gaussians.get_features.transpose(1, 2).view(-1, 3, (gaussians.max_sh_degree+1)**2)
-    #     dir_pp = (gaussians.get_xyz - T_c2w_Rt[:3, 3].unsqueeze(0).repeat(gaussians.get_features.shape[0], 1))
-    #     dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-    #     sh2rgb = eval_sh(gaussians.active_sh_degree, shs_view, dir_pp_normalized)
-    #     colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
-
-    #     background = torch.ones(3, device=self.device)
-
-    #     out_img, out_alpha, out_depth, out_uncertainty = RasterizeGaussians.apply(
-    #         xys,
-    #         depths,
-    #         radii,
-    #         conics,
-    #         num_tiles_hit,
-    #         colors_precomp,
-    #         gaussians.get_opacity,
-    #         image_height,
-    #         image_width,
-    #         background,
-    #         False,
-    #         bRenderDepth)
-
-    #     torch.cuda.synchronize()
-
-    #     # convert rgb image to single channel image for event loss
-    #     if nOutputChannel == 1:
-    #         out_img = out_img.mean(dim=2) 
-
-    #     return {'image': out_img,
-    #             'depth': out_depth,
-    #             "viewspace_points": screenspace_points,
-    #             'uncertainty': out_uncertainty,
-    #             'xys': xys,
-    #             'visibility_filter': radii > 0, 
-    #             "radii": radii}
-    
     def rasterize_splats(
         self,
         camtoworlds: Tensor,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
-        
+
         # read the camera parameters
         Ks = torch.from_numpy(self.dataset.K).to(self.device).unsqueeze(0) # [1, 3, 3]
         width = self.dataset.W
         height = self.dataset.H
-        
+
         near_plane=self.gs_cfg.near_plane,
         far_plane=self.gs_cfg.far_plane,
-        
+
         means = self.splats["means"]  # [N, 3]
-        # quats = F.normalize(self.splats["quats"], dim=-1)  # [N, 4]
-        # rasterization does normalization internally
         quats = self.splats["quats"]  # [N, 4]
         scales = torch.exp(self.splats["scales"])  # [N, 3]
         opacities = torch.sigmoid(self.splats["opacities"])  # [N,]
 
-        # image_ids = kwargs.pop("image_ids", None)
-        # if self.cfg.app_opt:
-        #     colors = self.app_module(
-        #         features=self.splats["features"],
-        #         embed_ids=image_ids,
-        #         dirs=means[None, :, :] - camtoworlds[:, None, :3, 3],
-        #         sh_degree=kwargs.pop("sh_degree", self.cfg.sh_degree),
-        #     )
-        #     colors = colors + self.splats["colors"]
-        #     colors = torch.sigmoid(colors)
-        # else:
         colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
-        
+
         # set the background color
         # 0-white, 1-black, 2-grey
         if self.config["mapping"]["background"]==0:
@@ -1078,17 +838,17 @@ class SLAM():
             img=render_colors[0][..., 0:3]  # [H, W, 3]
         else:
             img=render_colors[0][..., 0]  # [H, W]
-        
+
         if render_colors.shape[-1]==4:
             depth_img = render_colors[0][..., 3:4][..., 0]  # [H, W]
         else:
             depth_img = None
-        
+
         return {"image": img,
                 "depth": depth_img,
                 "alpha": render_alphas,
                 "info": info}
-    
+
     def warp_image(self, T_se3_src2wld, T_se3_dst2wld, depth_src, image_dst):
         fx = self.dataset.fx
         fy = self.dataset.fy
@@ -1117,24 +877,24 @@ class SLAM():
         intrinsics[..., 1, 2] += cy
         intrinsics[..., 2, 2] += 1.0
         intrinsics[..., 3, 3] += 1.0
-        
+
         T_src2wld_Rt = torch.eye(4).repeat(1, 1, 1).to(self.device)
         T_dst2wld_Rt = torch.eye(4).repeat(1, 1, 1).to(self.device)
-        
+
         T_src2wld_Rt[..., :3, :4] = se3_to_SE3(T_se3_src2wld)
         T_dst2wld_Rt[..., :3, :4] = se3_to_SE3(T_se3_dst2wld)
-        
+
         # create image hegith and width
         height_tmp = torch.zeros(1).to(self.device)
         height_tmp[..., 0] += height
         width_tmp = torch.zeros(1).to(self.device)
         width_tmp[..., 0] += width
-        
-        # creat pinhole cameras 
+
+        # creat pinhole cameras
         pinhole_src = tgm.PinholeCamera(intrinsics, T_src2wld_Rt, height_tmp, width_tmp)
         pinhole_dst = tgm.PinholeCamera(intrinsics, T_dst2wld_Rt, height_tmp, width_tmp)
-        
-        # 
+
+        #
         image_src = depth_warp(pinhole_dst, pinhole_src, depth_src, image_dst, height, width)  # NxCxHxW
         image_src = image_src.squeeze()
         depth_src = depth_src.squeeze()
@@ -1142,9 +902,9 @@ class SLAM():
         with torch.no_grad():
             if image_src.dim() == 3:
                 image_src = image_src.permute(1,2,0)
-                mask_src = torch.bitwise_and(image_src.mean(dim=2) > 0, depth_src > 0).detach().float() # no need to propagate gradients for mask 
+                mask_src = torch.bitwise_and(image_src.mean(dim=2) > 0, depth_src > 0).detach().float() # no need to propagate gradients for mask
             else:
-                mask_src = torch.bitwise_and(image_src > 0, depth_src > 0).detach().float() # no need to propagate gradients for mask 
+                mask_src = torch.bitwise_and(image_src > 0, depth_src > 0).detach().float() # no need to propagate gradients for mask
 
             mask_src = 1 - mask_src
 
@@ -1153,71 +913,58 @@ class SLAM():
             mask_src = 1. - torch.clamp(torch.nn.functional.conv2d(mask_src.unsqueeze(0).unsqueeze(0), kernel_tensor, padding=(1, 1)), 0, 1).squeeze()
 
         return image_src, mask_src
-    
+
     def post_process_event_image(self, events_stream, _sigma=0.001):
         #
         if self.config["dataset"] == "tum_vie" and self.config["data"]["downsample_factor"]>1:
-            events_map = self.accumulate_event_to_img(self.dataset.H_old, self.dataset.W_old, events_stream) 
+            events_map = self.accumulate_event_to_img(self.dataset.H_old, self.dataset.W_old, events_stream)
         else:
-            events_map = self.accumulate_event_to_img(self.dataset.H, self.dataset.W, events_stream) 
+            events_map = self.accumulate_event_to_img(self.dataset.H, self.dataset.W, events_stream)
 
         if self.config["dataset"] == "tum_vie":
             if self.config["mapping"]["use_median_filter"]:
                 events_map = self.median_filter(events_map.unsqueeze(0).unsqueeze(0)).squeeze()
             if self.config["data"]["downsample_factor"]>1:
-                events_map = events_map.cpu().numpy()     
-                # events_map = cv2.fisheye.undistortImage(events_map, self.dataset.K_old, self.dataset.dist_coeffs, Knew=self.dataset.K_old, new_size=(self.dataset.W_old, self.dataset.H_old))
+                events_map = events_map.cpu().numpy()
                 events_map = cv2.fisheye.undistortImage(events_map, self.dataset.K, self.dataset.dist_coeffs, Knew=self.dataset.K_new, new_size=(self.dataset.W, self.dataset.H))
-                events_map = cv2.resize(events_map, (self.dataset.W, self.dataset.H), interpolation=cv2.INTER_LINEAR) #cv2.INTER_AREA     
+                events_map = cv2.resize(events_map, (self.dataset.W, self.dataset.H), interpolation=cv2.INTER_LINEAR) #cv2.INTER_AREA
                 events_map = torch.from_numpy(events_map).cuda()
             else:
                 events_map = events_map.cpu().numpy()
-                # events_map = cv2.fisheye.undistortImage(events_map, self.dataset.K, self.dataset.dist_coeffs, Knew=self.dataset.K, new_size=(self.dataset.W, self.dataset.H))
                 events_map = cv2.fisheye.undistortImage(events_map, self.dataset.K, self.dataset.dist_coeffs, Knew=self.dataset.K_new, new_size=(self.dataset.W, self.dataset.H))
                 events_map = torch.from_numpy(events_map).cuda()
-        # elif self.config["dataset"] == "vector":
-        #     events_map = events_map.cpu().numpy()
-            
-        #     # undisted_img = cv2.undistort(events_map, self.dataset.K_old, self.dataset.dist_coeffs, newCameraMatrix=self.dataset.K_new)
-        #     undisted_img = cv2.undistort(events_map, self.dataset.K_old, self.dataset.dist_coeffs)
-        #     events_map = torch.from_numpy(undisted_img).cuda()
         elif self.config["dataset"] == "dev_real" or self.config["dataset"] == "rpg_evo_stereo":
             events_map = events_map.cpu().numpy()
-            # undisted_img = cv2.undistort(events_map, self.dataset.K_old, self.dataset.dist_coeffs, newCameraMatrix=self.dataset.K_new)
             undisted_img = cv2.undistort(events_map, self.dataset.K, self.dataset.dist_coeffs)
             events_map = torch.from_numpy(undisted_img).cuda()
             if self.config["mapping"]["use_median_filter"]:
                 events_map = self.median_filter_dvs(events_map.unsqueeze(0).unsqueeze(0)).squeeze()
-        
+
         if self.config["blur_event"]:
             # blur
             blurrer = v2.GaussianBlur(kernel_size=(5,5), sigma=_sigma)
             events_map = blurrer(events_map.unsqueeze(0).unsqueeze(0)).squeeze()
-        
+
         return events_map
 
     def initialize_gaussian_scene(self, events_stream, num_pixels_to_sample, T_cam_to_wld, threshold = 0.1, depth_map=None):
         if depth_map is not None:
             assert(depth_map.dim()==2)
         threshold = self.config["event"]["threshold"]
-    
-        
+
+
         if depth_map is None:
-            # depth = 100
             num_pts = 100_000
             print(f"Generating random point cloud ({num_pts})...")
-            
-            # We create random points inside the bounds of the synthetic Blender scenes
-            # xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
-            # xyz = np.random.random((num_pts, 3)) * 7.0 - 3.5
+
             bounding_size = self.config["bounding_size"]
             xyz = np.random.random((num_pts, 3))*bounding_size - 0.5*bounding_size
-            
+
             shs = np.random.random((num_pts, 3)) / 255.0
             xyz = torch.from_numpy(xyz).cuda().float()
             shs = torch.from_numpy(shs).cuda().float()
             pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=torch.zeros_like(xyz).cuda().float())
-        
+
         else:
             print('Use provided depth map for scene initialization...')
             events_map = self.post_process_event_image(events_stream)
@@ -1227,10 +974,10 @@ class SLAM():
             valid_pixels = ((depth_map.abs() > min_depth) & (depth_map.abs() < max_depth)).sum().item()
             print(f"Valid pixels in depth map: {valid_pixels} / {depth_map.numel()} (min_depth={min_depth})")
             if valid_pixels < num_pixels_to_sample:
-                num_pixels_to_sample = valid_pixels  # 如果有效像素不足，则取全部
+                num_pixels_to_sample = valid_pixels
                 print(f"Reducing num_pixels_to_sample to {num_pixels_to_sample}")
     #=======================================================================================#
-    
+
             # sample pixels with events
             fx = self.dataset.fx
             fy = self.dataset.fy
@@ -1238,9 +985,9 @@ class SLAM():
             cy = self.dataset.cy
             H = self.dataset.H
             W = self.dataset.W
-            
-            
-            if self.config["initialization"]["gaussian_init_sfm_mask"]==1: # using event map mask; 
+
+
+            if self.config["initialization"]["gaussian_init_sfm_mask"]==1: # using event map mask;
                 pixel_uv_with_event = torch.where(events_map.abs() > threshold)
                 sampled_event_pixel_idx = torch.randperm(pixel_uv_with_event[0].shape[0])[:num_pixels_to_sample]
                 indice_h = pixel_uv_with_event[0][sampled_event_pixel_idx].to(self.device)
@@ -1256,43 +1003,41 @@ class SLAM():
                 sampled_event_pixel_idx = torch.randperm(pixel_uv_with_event[0].shape[0])[:int(num_pixels_to_sample*0.5)]
                 indice_h1 = pixel_uv_with_event[0][sampled_event_pixel_idx].to(self.device)
                 indice_w1 = pixel_uv_with_event[1][sampled_event_pixel_idx].to(self.device)
-                
+
                 pixel_uv_with_event = torch.where(events_map.abs() > threshold)
                 sampled_event_pixel_idx = torch.randperm(pixel_uv_with_event[0].shape[0])[:int(num_pixels_to_sample*0.5)]
                 indice_h2 = pixel_uv_with_event[0][sampled_event_pixel_idx].to(self.device)
                 indice_w2 = pixel_uv_with_event[1][sampled_event_pixel_idx].to(self.device)
-                
+
                 indice_h = torch.cat([indice_h1, indice_h2])
                 indice_w = torch.cat([indice_w1, indice_w2])
 #============================================================================================#
             elif self.config["initialization"]["gaussian_init_sfm_mask"]==3:
                 print("Using uniform sampling across entire image")
-                # 生成所有像素坐标
                 all_h = torch.arange(H, device=self.device)
                 all_w = torch.arange(W, device=self.device)
                 grid_h, grid_w = torch.meshgrid(all_h, all_w, indexing='ij')
                 pixel_indices = torch.stack([grid_h.ravel(), grid_w.ravel()], dim=1)  # [H*W, 2]
 
-                # 随机选择 num_pixels_to_sample 个像素
                 sampled_idx = torch.randperm(pixel_indices.shape[0])[:num_pixels_to_sample]
                 indice_h = pixel_indices[sampled_idx, 0]
                 indice_w = pixel_indices[sampled_idx, 1]
 #============================================================================================#
             else:
                 raise ValueError("wrong option for gaussian_init_sfm_mask")
-            
-            
+
+
             #
             sampled_rays = get_camera_rays(H, W, fx, fy, cx, cy, type='OpenCV').to(self.device)
             sampled_rays = sampled_rays[indice_h, indice_w, :]
         #==================================================================#
             depth_scale=self.config['mapping'].get('depth_scale')
             depth = depth_map[indice_h, indice_w].unsqueeze(-1).float()*depth_scale
-            
+
         #==================================================================#
             sampled_rays = (sampled_rays * depth).transpose(1,0).to(self.device)
             #
-            sampled_rays = torch.matmul(T_cam_to_wld[:3, :3], sampled_rays) + T_cam_to_wld[:3, 3].unsqueeze(-1) 
+            sampled_rays = torch.matmul(T_cam_to_wld[:3, :3], sampled_rays) + T_cam_to_wld[:3, 3].unsqueeze(-1)
             points = sampled_rays.transpose(1, 0)
             # colors
             min = events_map.min()
@@ -1310,7 +1055,7 @@ class SLAM():
     # spline pose and get 7 rays_o/rays_d, then get color and average
     def initialization(self, init_batch, niters, traj_mode='cspline', depth_map=None):
         traj_mode = 'linear'
-        
+
         num_batch = len(init_batch)
         frame_ts_all = []
         frame_id_all = []
@@ -1327,7 +1072,7 @@ class SLAM():
         num_events_to_skip = self.config["num_events_to_skip"]
         preSum_event_batch[0] = preSum_event_batch[0]+num_events_to_skip
         preSum_event_batch[-1] = preSum_event_batch[-1]-num_events_to_skip
-        
+
         if depth_map is None:
             print('#########################   random initialization   #########################')
         else:
@@ -1340,12 +1085,9 @@ class SLAM():
                 T_cam2wld_Rt = se3_to_SE3_m44(self.ctrl_knot_se3_all[idx_]).cuda()
             else:
                 T_cam2wld_Rt = torch.eye(4).to(self.device)
-            
+
             gaussian_num_sfm = self.config["initialization"]["gaussian_num_sfm"]
             pcd = self.initialize_gaussian_scene(events_all[0], gaussian_num_sfm, T_cam2wld_Rt, depth_map=depth_map)
-            # self.gs_model.create_from_tensor_pcd(pcd, spatial_lr_scale=8.23)
-            # self.gs_model.training_setup(self.gs_opt_cfg)
-            
             feature_dim = 32 if self.gs_cfg.app_opt else None
             if self.config["retain_old_gs"]:
                 print(f"============================= retain old gs ===============================")
@@ -1375,7 +1117,7 @@ class SLAM():
                     device=self.device,
                     points=pcd.points
                 )
-        
+
         # densification setting
         self.gs_cfg.prune_opa = self.config["mapping"]["prune_opa"]
         self.gs_cfg.refine_start_iter = self.config["mapping"]["refine_start_iter"]
@@ -1385,7 +1127,7 @@ class SLAM():
         self.gs_cfg.grow_scale3d = self.config["mapping"]["grow_scale3d"]
         # prune_scale3d: float = 0.1
         self.gs_cfg.prune_scale3d = self.config["mapping"]["prune_scale3d"]
-        
+
         # Densification Strategy
         self.strategy = DefaultStrategy(
             verbose=True,
@@ -1394,7 +1136,6 @@ class SLAM():
             grow_grad2d=self.gs_cfg.grow_grad2d,
             grow_scale3d=self.gs_cfg.grow_scale3d,
             prune_scale3d=self.gs_cfg.prune_scale3d,
-            # refine_scale2d_stop_iter=4000, # splatfacto behavior
             refine_start_iter=self.gs_cfg.refine_start_iter,
             refine_stop_iter=self.gs_cfg.refine_stop_iter,
             reset_every=self.gs_cfg.reset_every,
@@ -1404,21 +1145,21 @@ class SLAM():
         )
         self.strategy.check_sanity(self.splats, self.optimizers)
         self.strategy_state = self.strategy.initialize_state()
-        
-        
+
+
         frame_ts_all_withzero = frame_ts_all.copy()
         frame_ts_all_withzero.insert(0, 0.0)
-        
+
         events_all = torch.cat(events_all, dim=0)
         ts_all = events_all[:,2].detach().cpu().numpy()
         t_data_min =  ts_all.min()
         t_data_max = ts_all.max()
         event_total_num = ts_all.shape[0]
-        
+
         incre_sampling_seg_num_expected = self.config["initialization"]["incre_sampling_seg_num_expected"]
         min_n_winsize = self.config["initialization"]["min_n_winsize"]
         max_n_winsize = self.config["initialization"]["max_n_winsize"]
-        
+
         incre_sampling_segs_end = np.linspace(10, event_total_num-10, incre_sampling_seg_num_expected).astype(int)
         start_tmp_ = np.searchsorted(incre_sampling_segs_end, max_n_winsize)
         if(incre_sampling_segs_end[start_tmp_]<=max_n_winsize):
@@ -1431,7 +1172,7 @@ class SLAM():
         print(f"*******************************  events_num: {event_total_num}  *********************************")
         print(f"incremental sampling number: {incre_sampling_seg_num}")
         print(f"****events_per_seg={events_per_seg}, min_n_winsize={min_n_winsize},max_n_winsize={max_n_winsize}, ")
-        
+
         ctrl_knot_ts = frame_ts_all.copy()
         ctrl_knot_ts.insert(0, t_data_min)
         if ctrl_knot_ts[-1]<frame_ts_all[-1]:
@@ -1440,11 +1181,11 @@ class SLAM():
         ctrl_knot_ts[-1] = ctrl_knot_ts[-1]+0.0001
         ctrl_knot_idx = frame_id_all.copy()
         ctrl_knot_idx.insert(0, frame_id_all[0]-1)
-        
+
         print(f"****t_data_min={t_data_min}, t_data_max={t_data_max}")
         print(f"control knot ts: {ctrl_knot_ts}")
-        
-        
+
+
         if len(self.ctrl_knot_ts_all)==0 or (not self.config["initialization"]["retain_pose"]):
             print("============== initialize control knots with random noise ==============")
             # set poses of control knots
@@ -1462,30 +1203,23 @@ class SLAM():
             ctrl_knot_se3 = pp.randn_se3(len(ctrl_knot_ts), sigma=0.001) #LieTensor
             for i in range(len(ctrl_knot_ts)):
                 ctrl_knot_se3[i] = self.ctrl_knot_se3_all[i]
-            
+
         print("finish control knots initialization")
-        
+
         ctrl_knot_se3 = torch.nn.Parameter(ctrl_knot_se3, requires_grad=True)
         pose_optimizer = torch.optim.Adam([{"params": ctrl_knot_se3, "lr": self.config['pose_lr']}])
-        
+
         color_channels=self.config["mapping"]["color_channels"]
-        
+
         training_batch_size = self.config["initialization"]["training_batch_size"]
         visualize_every_iter = self.config["initialization"]["visualize_every_iter"]
         blur_sigma = self.config["blur_sigma"]
         for iter in range(niters):
-            # if i%100 == 0:
-            #     blur_sigma = blur_sigma/2
-            
             loss_event = torch.zeros([1], dtype=torch.float64, device=self.device, requires_grad=True)
             loss_no_event = torch.zeros([1], dtype=torch.float64, device=self.device, requires_grad=True)
             loss_ssim = torch.zeros([1], dtype=torch.float64, device=self.device, requires_grad=True)
             loss_white_balance = torch.zeros([1], dtype=torch.float64, device=self.device, requires_grad=True)
             loss_tr = torch.zeros([1], dtype=torch.float64, device=self.device, requires_grad=True)
-        #==============================================================================================================#
-            # loss_depth_total=torch.zeros([1],dtype=torch.float64,device=self.device,requires_grad=True)
-        #==============================================================================================================#
-            # incremental random sampling
             random_start_end_idx = []
             for ii in range(incre_sampling_seg_num):
                 end_idx_ = incre_sampling_segs_end[ii]
@@ -1493,12 +1227,12 @@ class SLAM():
                 start_idx_ = end_idx_-winsize_
                 random_start_end_idx.append([start_idx_, end_idx_])
             indices = np.random.permutation(len(random_start_end_idx)).tolist()[:training_batch_size]
-            
+
             list_img_ev_start = []
             list_img_ev_end = []
             list_gt_events_acc = []
             list_syn_event_acc = []
-            
+
             linlog_thres = self.config["event"]["linlog_thres"]
             # intra-chunk sampling
             for j in indices:
@@ -1510,70 +1244,58 @@ class SLAM():
 
                 T_SE3_ev_start = self.get_poses_lie(ctrl_knot_se3, ctrl_knot_ts, t_ev_start, mode=traj_mode)
                 T_SE3_ev_end = self.get_poses_lie(ctrl_knot_se3, ctrl_knot_ts, t_ev_end, mode=traj_mode)
-                
+
                 # forward
                 c2w_start = T_SE3_ev_start.matrix().unsqueeze(0).cuda()  #[1, 4, 4]
                 render_pkg_start = self.rasterize_splats(camtoworlds=c2w_start, render_mode="RGB+ED")
                 c2w_end = T_SE3_ev_end.matrix().unsqueeze(0).cuda()  #[1, 4, 4]
                 render_pkg_end = self.rasterize_splats(camtoworlds=c2w_end, render_mode="RGB+ED")
-                
+
                 img_ev_start = render_pkg_start["image"]
                 img_ev_end = render_pkg_end["image"]
-                
+
                 if self.config["use_linLog"]:
                     pred_linlog_start = lin_log(img_ev_start*255, linlog_thres=linlog_thres) # (B, Nevs, 1)
                     pred_linlog_end = lin_log(img_ev_end*255, linlog_thres=linlog_thres) # (B, Nevs, 1)
                     syn_event_acc = pred_linlog_end - pred_linlog_start
                 else:
-                    # syn_event_acc = (log(img_ev_end) - log(img_ev_start))
                     eps = 0.1
                     syn_event_acc = torch.log(img_ev_end**2.2+eps)-torch.log(img_ev_start**2.2+eps)
-                
+
                 # compute event loss
-                gt_events_acc = self.post_process_event_image(selected_event_stream, _sigma=blur_sigma)    
-                
-                # if self.config["use_mask_event_loss"]:
-                event_mask = (gt_events_acc.abs() != 0).float() 
+                gt_events_acc = self.post_process_event_image(selected_event_stream, _sigma=blur_sigma)
+
+                event_mask = (gt_events_acc.abs() != 0).float()
                 no_event_mask = (gt_events_acc.abs() == 0).float()
-                
+
                 # no-event loss
                 no_event_gaussian_cov = self.config["mapping"]["no_event_gaussian_cov"]
                 gt_no_events = self.config["event"]["threshold"] * no_event_gaussian_cov * torch.randn_like(gt_events_acc).cuda()
                 gt_no_events = gt_no_events*no_event_mask
-                
+
                 if self.config["mapping"]["color_channels"]==3:
                     gt_events_acc = gt_events_acc.unsqueeze(-1).repeat(1, 1, 3)
-                    # gt_events_acc = np.tile(gt_events_acc[..., None], (1, 1, 3))
                     gt_events_acc = gt_events_acc*self.color_mask
                     syn_event_acc = syn_event_acc*self.color_mask
-                
+
                 if self.config["seprate_event_noevent_loss"]:
                     loss_event = loss_event + (event_mask*(gt_events_acc - syn_event_acc)**2).sum() / event_mask.sum()
                     loss_no_event = loss_no_event + (no_event_mask*(gt_no_events - syn_event_acc)**2).sum() / no_event_mask.sum()
                 else:
-                    # gt_events_acc = gt_events_acc+gt_no_events # TODO: xiugai !!!
                     gt_events_acc = gt_events_acc
                     loss_event = loss_event + ((gt_events_acc - syn_event_acc)**2).mean()
-                
-                
+
+
                 if self.config["mapping"]["color_channels"]==3:
                     loss_ssim = loss_ssim + compute_ssim_loss(gt_events_acc, syn_event_acc, channel=3)
                 else:
                     loss_ssim = loss_ssim + compute_ssim_loss(gt_events_acc, syn_event_acc, channel=1)
-                    
-                # # visualize vector mask on event image
-                # vector_vis_event = gt_events_acc*self.vector_mask
-                # vector_events_acc = render_ev_accumulation(vector_vis_event.cpu().numpy(), self.dataset.H, self.dataset.W)
-                # save_dir = os.path.join(self.config["data"]["output"], self.config["data"]["exp_name"])
-                # img_path = os.path.join(save_dir, f"vector_mask_event.jpg")  
-                # imageio.imwrite(img_path, vector_events_acc)
-                # os.system.exit(0)
-                
+
                 list_img_ev_start.append(img_ev_start.detach())
                 list_img_ev_end.append(img_ev_end.detach())
                 list_gt_events_acc.append(gt_events_acc)
                 list_syn_event_acc.append(syn_event_acc.detach())
-            
+
             # rgb loss
             if self.config["mapping"]["use_rgb_loss"]:
                 rgb_idx_ = np.random.randint(num_batch)
@@ -1585,16 +1307,16 @@ class SLAM():
                 loss_rgb = rgb_w*((rgb_est-rgb_gt_)**2).mean()
             else:
                 loss_rgb = torch.zeros([1], dtype=torch.float64, device=self.device, requires_grad=True)
-            
+
             # tikhonov regularization loss
             tr_w = self.config["mapping"]["tr_loss_weight"]
             loss_tr = tr_w*tikhonov_regularization(render_pkg_start["depth"].unsqueeze(-1))
-            
+
             if self.config["mapping"]["use_white_balance_loss"]:
-                # white balance loss 
+                # white balance loss
                 white_balance_weight = self.config["mapping"]["white_balance_weight"]
                 loss_white_balance = white_balance_weight*compute_white_balance_loss(img_ev_end.mean())
-            
+
             self.strategy.step_pre_backward(
                 params=self.splats,
                 optimizers=self.optimizers,
@@ -1603,7 +1325,7 @@ class SLAM():
                 info=render_pkg_end["info"],
             )
         #===========================================================================================================#
-            
+
         #===========================================================================================================#
 
             loss_event = loss_event/len(indices)
@@ -1613,21 +1335,14 @@ class SLAM():
             factor_ = self.config["mapping"]["ssim_loss_factor_"]
             loss_event = (1-factor_)*loss_event
             loss_ssim = factor_*loss_ssim
-            
-            # # isotropic loss
-            # scaling = self.splats["scales"]  # [N, 3]
-            # isotropic_loss_all = torch.abs(scaling - scaling.mean(dim=1).view(-1, 1))
-            # iso_w = self.config["mapping"]["loss_isotropic_weight"]
-            # loss_isotropic = iso_w * isotropic_loss_all.mean()
-            
-            # loss_total = loss_event + loss_ssim + loss_isotropic + loss_rgb 
+
             loss_total = loss_event + loss_ssim + loss_no_event + loss_white_balance + loss_tr
-            
-            # optimize 
+
+            # optimize
             pose_optimizer.zero_grad()
             loss_total.backward()
             torch.cuda.synchronize()
-            
+
             # densification
             self.strategy.step_post_backward(
                 params=self.splats,
@@ -1636,12 +1351,11 @@ class SLAM():
                 step=iter,
                 info=render_pkg_end["info"],
             )
-            
+
             for optimizer in self.optimizers.values():
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
-            
-            # if self.config["opt_pose"] and i>1000:
+
             if self.config["opt_pose"]:
                 if (depth_map is None) or (depth_map is not None and iter>200):
                     pose_optimizer.step()
@@ -1656,69 +1370,63 @@ class SLAM():
                     accum_est_poses_Rt = []
                     accum_gt_poses_Rt = []
                     tag = f"pose"
-                    
-                    # # save ply file
-                    # ply_path = os.path.join(save_path, f"pointCloud_it{iter}.ply")
-                    # self.save_ply(ply_path)
-                    
+
                     for n in range(num_batch):
                         if traj_mode == "cspline":
                             if n==0 or n==(num_batch-1):
                                 continue
                         k = frame_id_all[n]
-                        ts = frame_ts_all[n]                        
-                        accum_est_poses_Rt.append(self.get_poses_lie(ctrl_knot_se3, ctrl_knot_ts, ts, mode=traj_mode).matrix()) 
-                        accum_gt_poses_Rt.append(init_batch[n]['c2w'].squeeze())                        
-                    
+                        ts = frame_ts_all[n]
+                        accum_est_poses_Rt.append(self.get_poses_lie(ctrl_knot_se3, ctrl_knot_ts, ts, mode=traj_mode).matrix())
+                        accum_gt_poses_Rt.append(init_batch[n]['c2w'].squeeze())
+
                     if self.config["dataset"] == "rpg_evo":
                         accum_gt_poses_Rt = accum_est_poses_Rt
-                    # plot 
+                    # plot
                     pose_evaluation(accum_gt_poses_Rt, accum_est_poses_Rt, 1, save_path, tag, f"init_f{iter:03}")
                     save_pose_as_kitti_evo(accum_gt_poses_Rt, accum_est_poses_Rt, save_path, f"init_f{iter:03}")
-                    
+
                     if self.config["initialization"]["visualize_intermediate_img"]:
-                        # save intermediate images 
+                        # save intermediate images
                         images_combined = []
                         for m in range(len(list_img_ev_start)):
                             diff = (list_gt_events_acc[m] - list_syn_event_acc[m]) **2
-                            
+
                             if color_channels == 1:
                                 gt_events_acc = render_ev_accumulation(list_gt_events_acc[m].cpu().numpy(), self.dataset.H, self.dataset.W)
-                                gt_events_grey = np.repeat(list_gt_events_acc[m].cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2) 
-                                
+                                gt_events_grey = np.repeat(list_gt_events_acc[m].cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
+
                                 syn_event_acc = list_syn_event_acc[m].detach().cpu().numpy()
                                 syn_event_acc1 = np.where(syn_event_acc > self.config["event"]["threshold"], syn_event_acc, 0)
                                 syn_event_acc2 = np.where(syn_event_acc < -self.config["event"]["threshold"], syn_event_acc, 0)
                                 syn_event_acc = syn_event_acc1 + syn_event_acc2
                                 syn_event_acc = render_ev_accumulation(syn_event_acc, self.dataset.H, self.dataset.W)
-                                
-                                syn_event_grey = np.repeat(list_syn_event_acc[m].detach().abs().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2) 
-                                diff = np.repeat(diff.detach().abs().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)  
-                                
-                                # render_ev_accumulation(syn_event_acc.cpu().numpy(), self.dataset.H, self.dataset.W)
+
+                                syn_event_grey = np.repeat(list_syn_event_acc[m].detach().abs().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
+                                diff = np.repeat(diff.detach().abs().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
+
                                 img_ev_start = np.repeat(list_img_ev_start[m].detach().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
                                 img_ev_end = np.repeat(list_img_ev_end[m].detach().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
                             else:
                                 gt_events_acc = render_ev_accumulation(list_gt_events_acc[m].sum(-1).cpu().numpy(), self.dataset.H, self.dataset.W)
                                 syn_event_acc = list_syn_event_acc[m].detach().abs().cpu().numpy()
                                 diff = diff.detach().abs().cpu().numpy()
-                                
-                                # render_ev_accumulation(syn_event_acc.cpu().numpy(), self.dataset.H, self.dataset.W)
+
                                 img_ev_start = list_img_ev_start[m].detach().cpu().numpy()
                                 img_ev_end = list_img_ev_end[m].detach().cpu().numpy()
-                                
+
                                 syn_event_grey = list_gt_events_acc[m].cpu().numpy()
                                 gt_events_grey = list_gt_events_acc[m].cpu().numpy()
 
                             image_combined = np.concatenate([img_ev_start,img_ev_end, gt_events_acc, gt_events_grey,syn_event_acc, syn_event_grey, diff], axis=1)
                             images_combined.append(image_combined)
-                        
+
                         images_combined = np.concatenate(images_combined, axis=0)
                         images_combined =  to8b(images_combined)
                         tag_img = "init_"
-                        img_path = os.path.join(save_path, tag_img + f"f{iter:03}_img.jpg")  
+                        img_path = os.path.join(save_path, tag_img + f"f{iter:03}_img.jpg")
                         imageio.imwrite(img_path, images_combined)
-                    
+
                     # render ALL images with depth
                     if self.config["render_eventview_img"]:
                         images_combined = []
@@ -1728,24 +1436,23 @@ class SLAM():
                             idx_ = frame_id_all[n]
                             ts = frame_ts_all[n]
                             T_SE3 = self.get_poses_lie(ctrl_knot_se3, ctrl_knot_ts, ts, mode=traj_mode)
-                            
+
                             c2w_ = T_SE3.matrix().unsqueeze(0).cuda()  #[1, 4, 4]
                             render_pkg_start = self.rasterize_splats(camtoworlds=c2w_, render_mode="RGB+ED")
-                            
+
                             depth_img_gs = render_pkg_start["depth"]  # [H, W, 1]
                             depth_tmp = depth_img_gs.detach()
                             depth_tmp = depth_tmp.view(depth_tmp.shape[0], depth_tmp.shape[1], -1)
                             depth_img = apply_colormap(depth_tmp)
                             depth_img = depth_img.cpu().numpy()
                             depth_img = to8b(depth_img)
-                            
-                            # rendered_img = render_pkg_start[0][..., 0:3][0]  # [H, W, 3]
+
                             rendered_img = render_pkg_start["image"]  # [H, W] or [H, W, 3]
                             if rendered_img.shape[-1]!=3:
                                 rendered_img = torch.tile(rendered_img[:,:,None], (1,1,3))
                             img = rendered_img.detach().cpu().numpy()
                             img = to8b(img)
-                            
+
                             image_combined = np.concatenate([img, depth_img], axis=1)
                             images_combined.append(image_combined)
                         images_combined = np.concatenate(images_combined, axis=0)
@@ -1753,47 +1460,39 @@ class SLAM():
                         imageio.imwrite(os.path.join(save_path, im_name), images_combined)
 
         print("********** Number of GS:", len(self.splats["means"]))
-        
+
         # update est_poses
         for n in range(num_batch):
             k = frame_id_all[n]
-            ts = frame_ts_all[n]                      
+            ts = frame_ts_all[n]
             self.est_c2w_data[k] = self.get_poses_lie(ctrl_knot_se3, ctrl_knot_ts, ts, mode=traj_mode).matrix().cuda()
             self.est_c2w_ts[k] = ts
-        
-        # render ALL images 
+
+        # render ALL images
         if self.config["render_eventview_img"]:
             with torch.no_grad():
                 for n in range(num_batch):
                     idx_ = frame_id_all[n]
                     ts = frame_ts_all[n]
                     T_SE3 = self.get_poses_lie(ctrl_knot_se3, ctrl_knot_ts, ts, mode=traj_mode)
-                    
+
                     c2w_ = T_SE3.matrix().unsqueeze(0).cuda()  #[1, 4, 4]
                     rendered_img = self.rasterize_splats(camtoworlds=c2w_, render_mode="RGB+ED")['image']
-                    
+
                     rendered_img = rendered_img.detach().cpu().numpy()
                     rendered_img =  to8b(rendered_img)
                     im_name = f"frame{idx_}_init.jpg"
                     imageio.imwrite(os.path.join(save_path, im_name), rendered_img)
                     if self.config["evaluate_init_image"]:
                         imageio.imwrite(os.path.join(self.dataset.event_save_path, im_name), rendered_img)
-                    
-                    # if self.config["render_tumvie_rgbCam_img"] and self.config["dataset"]=="tum_vie":
-                    #     # render rbg camera image
-                    #     img_ev_start_rgb = self.render_with_gsplat(self.gs_model, T_se3, render_tumvie_rgb=True)['image']
-                    #     img_ev_start_rgb = np.repeat(img_ev_start_rgb.detach().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
-                    #     img_path = os.path.join(save_path, tag_img + f"frame{idx_}_init_rgbCam.jpg")  
-                    #     imageio.imwrite(img_path, to8b(img_ev_start_rgb))
-        
-        # save control knot pose and ts
+
         for ii in range(len(ctrl_knot_idx)):
             idx_ = ctrl_knot_idx[ii]
             self.ctrl_knot_ts_all[idx_] = ctrl_knot_ts[ii]
             self.ctrl_knot_se3_all[idx_] = ctrl_knot_se3[ii].detach().clone()  # [], cuda
-        
+
         print("======================= finished initialization  =========================")
-    
+
     def save_model(self, path_to_save, tag, accum_ctrl_se3, accum_ctrl_ts):
         print('saving model in', path_to_save, 'with tag', tag, '...')
 
@@ -1807,11 +1506,11 @@ class SLAM():
             np.save(os.path.join(path_to_save, tag + '_ctrl_poses.npy'), accum_ctrl_se3)
             np.save(os.path.join(path_to_save, tag + '_ctrl_ts.npy'), accum_ctrl_ts)
             self.gs_model.save_ply(os.path.join(path_to_save, tag + '_gaussians.npy'))
-        return 
-    
+        return
+
     def load_model(self, path_to_load, tag):
         print('Loading model from', path_to_load, 'with tag', tag, '...')
-        
+
         self.gs_model.load_ply(os.path.join(path_to_load, tag + '_gaussians.npy'))
         self.gs_model.training_setup(self.gs_opt_cfg)
 
@@ -1820,7 +1519,7 @@ class SLAM():
         accum_ctrl_ts = np.load(os.path.join(path_to_load, tag + '_ctrl_ts.npy')).tolist()
 
         return accum_ctrl_se3, accum_ctrl_ts
-    
+
     def predict_velocity(self, T_Rt_prev, T_Rt_prevprev):
         T_Rt_c2w_prev = torch.eye(4, device=self.device)
         T_Rt_c2w_prevprev = torch.eye(4, device=self.device)
@@ -1829,15 +1528,13 @@ class SLAM():
         T_Rt_c2w_prevprev[:3,:4] = T_Rt_prevprev
 
         T_Rt_delta = torch.matmul(torch.linalg.inv(T_Rt_c2w_prevprev), T_Rt_c2w_prev)
-        # T_Rt_cur = torch.matmul(T_Rt_c2w_prev, T_Rt_delta)
-
         return T_Rt_delta #T_Rt_cur[:3,:4]
 
     def predict_pose_se3_lie(self, pose_prev_se3_lie, pose_prevprev_se3_lie):
         pose_delta_SE3_lie = pose_prevprev_se3_lie.Inv().Exp() * pose_prev_se3_lie.Exp()
         predicted_SE3_lie = pose_prev_se3_lie.Exp() * pose_delta_SE3_lie
         return predicted_SE3_lie.Log()
-    
+
     def get_poses(self, control_knot_poses, control_knot_ts, query_t, mode = 'cspline'):
         if mode == 'linear':
             if np.abs(query_t - control_knot_ts[0]) < 1e-6:
@@ -1847,20 +1544,20 @@ class SLAM():
 
             assert query_t >= control_knot_ts[0]   # numpy
             assert query_t <= control_knot_ts[-1]
-            
+
             idx_end = np.searchsorted(control_knot_ts, query_t)
             idx_start = idx_end - 1
             assert idx_start>=0
             assert control_knot_ts[idx_start]<=query_t
             assert control_knot_ts[idx_end]>=query_t
-            
+
             ctrl_knot_t_start = control_knot_ts[idx_start]
             ctrl_knot_delta_t = control_knot_ts[idx_end] - control_knot_ts[idx_start]
-            
+
             elapsed_t = query_t - ctrl_knot_t_start
             tau = elapsed_t/ctrl_knot_delta_t # normalize to (0,1)
-            
-            pose_interp = (1. - tau) * control_knot_poses[idx_start] + tau * control_knot_poses[idx_end]        
+
+            pose_interp = (1. - tau) * control_knot_poses[idx_start] + tau * control_knot_poses[idx_end]
         elif mode == 'cspline':
             if np.abs(query_t - control_knot_ts[1]) < 1e-6:
                 query_t = query_t + 1e-6
@@ -1877,8 +1574,6 @@ class SLAM():
             idx = int(elapsed_t / ctrl_knot_delta_t)
             tau = (elapsed_t % ctrl_knot_delta_t) / ctrl_knot_delta_t # normalize to (0,1)
 
-            #pose_interp = Spline4N_new(control_knot_poses[idx], control_knot_poses[idx+1], control_knot_poses[idx+2], control_knot_poses[idx+3], tau)
-            #===================================================================#
             segment=torch.stack([control_knot_poses[idx],control_knot_poses[idx+1],control_knot_poses[idx+2]
                                  ,control_knot_poses[idx+3]],dim=0).unsqueeze(0)
             tau_tensor=torch.tensor([tau]).reshape(1,1).to(control_knot_poses.device)
@@ -1886,7 +1581,7 @@ class SLAM():
             pose_interp=SE3_to_se3(pose_interp.squeeze(0))
             #===================================================================#
             pose_interp = SE3_to_se3(pose_interp.squeeze(0))
-        return pose_interp 
+        return pose_interp
 
     def get_poses_lie(self, control_knot_poses, control_knot_ts, query_t, mode = 'cspline'):
         if mode == 'linear':
@@ -1897,27 +1592,22 @@ class SLAM():
 
             assert query_t >= control_knot_ts[0]   # numpy
             assert query_t <= control_knot_ts[-1]
-            
+
             idx_end = np.searchsorted(control_knot_ts, query_t)
             idx_start = idx_end - 1
             assert idx_start>=0
             assert control_knot_ts[idx_start]<=query_t
             assert control_knot_ts[idx_end]>=query_t
-            
+
             ctrl_knot_t_start = control_knot_ts[idx_start]
             ctrl_knot_delta_t = control_knot_ts[idx_end] - control_knot_ts[idx_start]
-            
+
             elapsed_t = query_t - ctrl_knot_t_start
             tau = elapsed_t/ctrl_knot_delta_t # normalize to (0,1)
-            
-            # tau = torch.tensor(tau).reshape([1,1])
-            # segment = torch.stack([control_knot_poses[idx_start], control_knot_poses[idx_end]], dim=0).unsqueeze(0)
-            # pose_interp = linear_interpolation(segment, tau)[0][0]  # SE3, [G]
-            # pose_interp = pose_interp.Log() # se3, [6]
-            
+
             pose_interp_se3_lie =  control_knot_poses[idx_start]*(1.-tau) +  control_knot_poses[idx_end]*tau
             pose_interp = pose_interp_se3_lie.Exp()
-            
+
         elif mode == 'cspline':
             if np.abs(query_t - control_knot_ts[1]) < 1e-6:
                 query_t = query_t + 1e-6
@@ -1926,36 +1616,36 @@ class SLAM():
 
             assert query_t >= control_knot_ts[1]
             assert query_t <= control_knot_ts[-2]
-            
+
             idx_end = np.searchsorted(control_knot_ts, query_t)
             idx_start = idx_end - 1
             assert idx_start>=0
             assert control_knot_ts[idx_start]<=query_t
             assert control_knot_ts[idx_end]>=query_t
-            
+
             ctrl_knot_t_start = control_knot_ts[idx_start]
             ctrl_knot_delta_t = control_knot_ts[idx_end] - control_knot_ts[idx_start]
-            
+
             elapsed_t = query_t - ctrl_knot_t_start
             tau = elapsed_t/ctrl_knot_delta_t # normalize to (0,1)
-            
-            segment = torch.stack([control_knot_poses[idx_start-1],control_knot_poses[idx_start], 
+
+            segment = torch.stack([control_knot_poses[idx_start-1],control_knot_poses[idx_start],
                                 control_knot_poses[idx_end], control_knot_poses[idx_end]], dim=0).unsqueeze(0)
             tau = torch.tensor(tau).reshape([1,1])
-            
+
             pose_interp = cubic_bspline_interpolation(segment, tau)[0][0]  # SE3, [7]
-        return pose_interp 
-    
+        return pose_interp
+
     def setup_seed(self, seed):
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
         np.random.seed(seed)
         random.seed(seed)
         torch.backends.cudnn.deterministic = True
-        
+
     def bundle_adjustment(self, BA_batch,  _traj_mode, _num_iters=100001, _seg_num=50, _opt_pose=True, _global_BA=False):
-        # Bundle adjustment 
-        
+        # Bundle adjustment
+
         num_batch = len(BA_batch)
         frame_ts_all = []
         frame_id_all = []
@@ -1972,18 +1662,18 @@ class SLAM():
         num_events_to_skip = self.config["num_events_to_skip"]
         preSum_event_batch[0] = preSum_event_batch[0]+num_events_to_skip
         preSum_event_batch[-1] = preSum_event_batch[-1]-num_events_to_skip
-        
+
         events_all = torch.cat(events_all, dim=0)
         ts_all = events_all[:,2].detach().cpu().numpy()
         t_data_min =  ts_all.min()
         t_data_max = ts_all.max()
-        
+
         # "incremental" random sampling
         event_total_num = ts_all.shape[0]
         incre_sampling_seg_num_expected = _seg_num
         min_n_winsize = self.config["BA"]["min_n_winsize"]
         max_n_winsize = self.config["BA"]["max_n_winsize"]
-        
+
         incre_sampling_segs_end = np.linspace(10, event_total_num-10, incre_sampling_seg_num_expected).astype(int)
         start_tmp_ = np.searchsorted(incre_sampling_segs_end, max_n_winsize)
         if(incre_sampling_segs_end[start_tmp_]<=max_n_winsize):
@@ -1996,18 +1686,18 @@ class SLAM():
         print(f"*******************************  BA events_num: {event_total_num}  *********************************")
         print(f"incremental sampling number: {incre_sampling_seg_num}")
         print(f"****events_per_seg={events_per_seg}, min_n_winsize={min_n_winsize},max_n_winsize={max_n_winsize}, ")
-        
-        
+
+
         if frame_id_all[-1] >= self.config["start_cspline_idx"] and self.config["traj_mode_BA"]=="cspline":
             traj_mode = "cspline"
         else:
             traj_mode = "linear"
-        
+
         # initialize trajectories
         active_ctrl_knot_ts = []
         active_ctrl_knot_idx = frame_id_all.copy()
         active_ctrl_knot_idx.insert(0, frame_id_all[0]-1)
-        
+
         if traj_mode == "cspline":
             active_ctrl_knot_se3 = pp.identity_se3(len(active_ctrl_knot_idx)+1) #LieTensor
             for ii in range(len(active_ctrl_knot_idx)):
@@ -2027,7 +1717,6 @@ class SLAM():
             del active_frame_id_all[0]
             del active_frame_ts_all[0]
             del preSum_event_batch[0]
-            # _num_iters += 500
         else:
             active_frame_id_all = frame_id_all.copy()
             active_frame_ts_all = frame_ts_all.copy()
@@ -2037,17 +1726,17 @@ class SLAM():
                 # TODO: ALL the idx is from 1
                 active_ctrl_knot_ts.append(self.ctrl_knot_ts_all[idx])
                 active_ctrl_knot_se3[ii] = self.ctrl_knot_se3_all[idx]
-        
+
         active_ctrl_knot_ts[0] = t_data_min-0.0001
         active_ctrl_knot_ts[-1] = t_data_max+0.0001
-        
+
         print(f"****t_data_min={t_data_min}, t_data_max={t_data_max}")
         print(f"control knot ts: {active_ctrl_knot_ts}")
-        
+
         if self.config["use_relative_pose_to_opt"]==1:
             active_ctrl_knot_se3_rel_opt = pp.identity_se3(active_ctrl_knot_se3.shape[0]) #LieTensor
             active_ctrl_knot_se3_base = active_ctrl_knot_se3.clone()
-            active_ctrl_knot_se3_rel_opt = torch.nn.Parameter(active_ctrl_knot_se3_rel_opt, requires_grad=True)        
+            active_ctrl_knot_se3_rel_opt = torch.nn.Parameter(active_ctrl_knot_se3_rel_opt, requires_grad=True)
             pose_optimizer = torch.optim.Adam([{"params": active_ctrl_knot_se3_rel_opt, "lr": self.config['pose_lr']}])
         elif self.config["use_relative_pose_to_opt"]==0:
             active_ctrl_knot_se3 = torch.nn.Parameter(active_ctrl_knot_se3, requires_grad=True)
@@ -2058,7 +1747,7 @@ class SLAM():
                 base_idx = 0
                 print("====================== Warning: Don't fix the first pose ======================")
             ctrl_knot_len = len(active_ctrl_knot_idx)
-            ctrl_knot_se3_base = self.ctrl_knot_se3_all[base_idx] 
+            ctrl_knot_se3_base = self.ctrl_knot_se3_all[base_idx]
             ctrl_knot_se3_rel_opt = pp.identity_se3(ctrl_knot_len)
             for ii in range(ctrl_knot_len):
                 ctrl_knot_se3_rel_opt[ii] = (self.ctrl_knot_se3_all[active_ctrl_knot_idx[ii]].Exp()*(ctrl_knot_se3_base.Inv().Exp())).Log()
@@ -2066,19 +1755,19 @@ class SLAM():
             pose_optimizer = torch.optim.Adam([{"params": ctrl_knot_se3_rel_opt, "lr": self.config['pose_lr']}])
         else:
             raise ValueError("wrong option for pose optimization")
-        
+
         active_num_batch = len(active_frame_id_all)
-        
+
         blur_sigma = self.config["blur_sigma"]
         batch_cnt = 0
         loss_total = None
         pose_optimizer.zero_grad()
-        
+
         # densification setting
         self.gs_cfg.refine_start_iter = self.config["mapping"]["refine_start_iter"]
         self.gs_cfg.refine_stop_iter= self.config["mapping"]["refine_stop_iter"]
         self.gs_cfg.refine_every = self.config["mapping"]["refine_every"]
-        
+
         # Densification Strategy
         strategy_BA = DefaultStrategy(
             verbose=True,
@@ -2087,18 +1776,17 @@ class SLAM():
             grow_grad2d=self.gs_cfg.grow_grad2d,
             grow_scale3d=self.gs_cfg.grow_scale3d,
             prune_scale3d=self.gs_cfg.prune_scale3d,
-            # refine_scale2d_stop_iter=4000, # splatfacto behavior
             refine_start_iter=self.gs_cfg.refine_start_iter,
             refine_stop_iter=self.gs_cfg.refine_stop_iter,
             refine_every=self.gs_cfg.refine_every,
-            
+
             reset_every=self.gs_cfg.reset_every,
             absgrad=self.gs_cfg.absgrad,
             revised_opacity=self.gs_cfg.revised_opacity,
         )
         strategy_BA.check_sanity(self.splats, self.optimizers)
         strategy_state_BA = strategy_BA.initialize_state()
-        
+
         training_batch_size = self.config["BA"]["training_batch_size"]
         visualize_every_iter = self.config["BA"]["visualize_every_iter"]
         if _global_BA:
@@ -2108,19 +1796,19 @@ class SLAM():
         for i in range(_num_iters):
             if i%100 == 0:
                 blur_sigma = blur_sigma/2
-            
+
             batch_cnt += 1
             if self.config["use_relative_pose_to_opt"]==1:
                 active_ctrl_knot_se3 = (active_ctrl_knot_se3_base.Exp()*active_ctrl_knot_se3_rel_opt.Exp()).Log()
             elif self.config["use_relative_pose_to_opt"]==2:
-                active_ctrl_knot_se3 = (ctrl_knot_se3_rel_opt.Exp()*ctrl_knot_se3_base.Exp()).Log() 
-            
+                active_ctrl_knot_se3 = (ctrl_knot_se3_rel_opt.Exp()*ctrl_knot_se3_base.Exp()).Log()
+
             loss_event = torch.zeros([1], dtype=torch.float64, device=self.device, requires_grad=True)
             loss_no_event = torch.zeros([1], dtype=torch.float64, device=self.device, requires_grad=True)
             loss_ssim = torch.zeros([1], dtype=torch.float64, device=self.device, requires_grad=True)
             loss_white_balance = torch.zeros([1], dtype=torch.float64, device=self.device, requires_grad=True)
             loss_tr = torch.zeros([1], dtype=torch.float64, device=self.device, requires_grad=True)
-            
+
         #=================================================================================================================================#
             loss_depth_total=torch.zeros([1],dtype=torch.float64,device=self.device,requires_grad=True)
         #=================================================================================================================================#
@@ -2132,12 +1820,12 @@ class SLAM():
                 start_idx_ = end_idx_-winsize_
                 random_start_end_idx.append([start_idx_, end_idx_])
             indices = np.random.permutation(len(random_start_end_idx)).tolist()[:training_batch_size]
-            
+
             list_img_ev_start = []
             list_img_ev_end = []
             list_gt_events_acc = []
             list_syn_event_acc = []
-            
+
             linlog_thres = self.config["event"]["linlog_thres"]
             # incremental random sampling
             for j in indices:
@@ -2146,18 +1834,18 @@ class SLAM():
                 selected_event_stream = events_all[idx_ev_start:idx_ev_end]
                 t_ev_start = ts_all[idx_ev_start]
                 t_ev_end = ts_all[idx_ev_end]
-                
+
                 T_SE3_ev_start = self.get_poses_lie(active_ctrl_knot_se3, active_ctrl_knot_ts, t_ev_start, mode=traj_mode)
                 T_SE3_ev_end = self.get_poses_lie(active_ctrl_knot_se3, active_ctrl_knot_ts, t_ev_end, mode=traj_mode)
-                
+
                 c2w_start = T_SE3_ev_start.matrix().unsqueeze(0).cuda()  #[1, 4, 4]
                 render_pkg_start = self.rasterize_splats(camtoworlds=c2w_start, render_mode="RGB+ED")
                 c2w_end = T_SE3_ev_end.matrix().unsqueeze(0).cuda()  #[1, 4, 4]
                 render_pkg_end = self.rasterize_splats(camtoworlds=c2w_end, render_mode="RGB+ED")
-                
+
                 img_ev_start = render_pkg_start["image"]
                 img_ev_end = render_pkg_end["image"]
-                
+
                 strategy_BA.step_pre_backward(
                     params=self.splats,
                     optimizers=self.optimizers,
@@ -2165,65 +1853,56 @@ class SLAM():
                     step=i,
                     info=render_pkg_end["info"],
                 )
-                
+
                 if self.config["use_linLog"]:
                     pred_linlog_start = lin_log(img_ev_start*255, linlog_thres=linlog_thres) # (B, Nevs, 1)
                     pred_linlog_end = lin_log(img_ev_end*255, linlog_thres=linlog_thres) # (B, Nevs, 1)
                     syn_event_acc = pred_linlog_end - pred_linlog_start
                 else:
-                    # syn_event_acc = (log(img_ev_end) - log(img_ev_start))
                     eps = 0.1
                     syn_event_acc = torch.log(img_ev_end**2.2+eps)-torch.log(img_ev_start**2.2+eps)
-                
+
                 # compute event loss
                 gt_events_acc = self.post_process_event_image(selected_event_stream, _sigma=blur_sigma)
-                # if self.config["use_mask_event_loss"]:
-                event_mask = (gt_events_acc.abs() != 0).float() 
+                event_mask = (gt_events_acc.abs() != 0).float()
                 no_event_mask = (gt_events_acc.abs() == 0).float()
-                
-                # if self.config["dataset"] == "vector":
-                #     loss_event = loss_event + (self.vector_mask * (gt_events_acc - syn_event_acc)**2).sum() / self.vector_mask.sum()
-                # else:
-                
-                # no-event loss
+
                 no_event_gaussian_cov = self.config["mapping"]["no_event_gaussian_cov"]
                 gt_no_events = self.config["event"]["threshold"] * no_event_gaussian_cov * torch.randn_like(gt_events_acc).cuda()
                 gt_no_events = gt_no_events*no_event_mask
-                
+
                 if self.config["mapping"]["color_channels"]==3:
                     gt_events_acc = gt_events_acc.unsqueeze(-1).repeat(1, 1, 3)
                     gt_no_events = gt_no_events.unsqueeze(-1).repeat(1, 1, 3)
-                    # gt_events_acc = np.tile(gt_events_acc[..., None], (1, 1, 3))
                     gt_events_acc = gt_events_acc*self.color_mask
                     syn_event_acc = syn_event_acc*self.color_mask
-                
+
                 if self.config["seprate_event_noevent_loss"]:
                     loss_event = loss_event + (event_mask*(gt_events_acc - syn_event_acc)**2).sum() / event_mask.sum()
                     loss_no_event = loss_no_event + (no_event_mask*(gt_no_events - syn_event_acc)**2).sum() / no_event_mask.sum()
                 else:
                     gt_events_acc = gt_events_acc+gt_no_events
                     loss_event = loss_event + ((gt_events_acc - syn_event_acc)**2).mean()
-                
+
                 if self.config["mapping"]["color_channels"]==3:
                     loss_ssim = loss_ssim + compute_ssim_loss(gt_events_acc, syn_event_acc, channel=3)
                 else:
                     loss_ssim = loss_ssim + compute_ssim_loss(gt_events_acc, syn_event_acc, channel=1)
-                
+
                 list_img_ev_start.append(img_ev_start.detach())
                 list_img_ev_end.append(img_ev_end.detach())
                 list_gt_events_acc.append(gt_events_acc)
                 list_syn_event_acc.append(syn_event_acc.detach())
-            
+
             if self.config["mapping"]["use_white_balance_loss"]:
-                # white balance loss 
+                # white balance loss
                 white_balance_weight = self.config["mapping"]["white_balance_weight"]
-                # loss_white_balance = white_balance_weight * (img_ev_end.mean() - 0.5) ** 2
                 loss_white_balance = white_balance_weight*torch.mean((img_ev_end - 0.5) ** 2)
-            
+
             # tikhonov regularization loss
             tr_w = self.config["mapping"]["tr_loss_weight"]
             loss_tr = tr_w*tikhonov_regularization(render_pkg_start["depth"].unsqueeze(-1))
-            
+
         #=================================================================================================================================#
             if _global_BA and self.depth_loss_weight>0:
                 depth_gt_start=self.get_depth_at_time(t_ev_start,BA_batch)
@@ -2247,28 +1926,17 @@ class SLAM():
             loss_ssim = factor_*loss_ssim
         #=================================================================#
             loss_depth_total=loss_depth_total/len(indices)
-        #=================================================================#
-            # # isotropic loss
-            # scaling = self.splats["scales"]  # [N, 3]
-            # isotropic_loss_all = torch.abs(scaling - scaling.mean(dim=1).view(-1, 1))
-            # iso_w = self.config["mapping"]["loss_isotropic_weight"]
-            # loss_isotropic = iso_w * isotropic_loss_all.mean()
-            
-            # loss_total = loss_event + loss_ssim + loss_isotropic+loss_white_balance
-
-            #loss_total = loss_event + loss_ssim + loss_white_balance + loss_no_event + loss_tr
             loss_total=loss_event+loss_ssim+loss_white_balance+loss_no_event+loss_tr+loss_depth_total
 
             loss_total.backward()
-            # loss_total = None
             for optimizer in self.optimizers.values():
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
-            
+
             if _opt_pose:
                 pose_optimizer.step()
                 pose_optimizer.zero_grad()
-            
+
             # densification
             strategy_BA.step_post_backward(
                 params=self.splats,
@@ -2277,49 +1945,45 @@ class SLAM():
                 step=i,
                 info=render_pkg_end["info"],
             )
-            
+
             # visualization
             frame_id_vis = frame_id_all[-1]
             if i % visualize_every_iter == 0 and self.config["visualize_inter_img"]:
                 print_str = f"iter {i}, loss={loss_total.item()}, event={loss_event.item()}, ssim={loss_ssim.item()}, white={loss_white_balance.item()}, noevent={loss_no_event.item()}, tr={loss_tr.item()}, depth={loss_depth_total.item()}"
                 print(print_str)
-                
+
                 with torch.no_grad():
                     # plot pose estimation
                     accum_est_poses_Rt = []
                     accum_gt_poses_Rt = []
-                    
+
                     tag = f"chunk_BA_{num_batch:03}_{i:04}"
-                    
-                    # save ply file
-                    # ply_path = os.path.join(save_path, f"pointCloud_f{frame_id_vis}_it{i}.ply")
-                    # self.save_ply(ply_path)
-                    
+
                     for n in range(active_num_batch):
                         k = active_frame_id_all[n]
-                        ts = active_frame_ts_all[n]                        
+                        ts = active_frame_ts_all[n]
                         accum_est_poses_Rt.append(self.get_poses_lie(active_ctrl_knot_se3, active_ctrl_knot_ts, ts, mode=traj_mode).matrix())
                         if traj_mode == "linear":
                             accum_gt_poses_Rt.append(BA_batch[n]['c2w'].squeeze())
                         else:
                             accum_gt_poses_Rt.append(BA_batch[n+1]['c2w'].squeeze())
-                    
-                    # plot 
+
+                    # plot
                     if self.config["dataset"] == "rpg_evo":
                         accum_gt_poses_Rt = accum_est_poses_Rt
                     pose_evaluation(accum_gt_poses_Rt, accum_est_poses_Rt, 1, save_path, "pose", f"BA_f{frame_id_vis:03}_{i:04}")
                     save_pose_as_kitti_evo(accum_gt_poses_Rt, accum_est_poses_Rt, save_path, f"BA_f{frame_id_vis:03}_{i:04}")
-                    
+
                     if self.config["visualize_inter_img"]:
-                        # save intermediate images 
+                        # save intermediate images
                         images_combined = []
                         for m in range(len(list_img_ev_start)):
                             diff = (list_gt_events_acc[m] - list_syn_event_acc[m]) **2
-                            
+
                             if self.config["mapping"]["color_channels"] == 1:
                                 gt_events_acc = render_ev_accumulation(list_gt_events_acc[m].cpu().numpy(), self.dataset.H, self.dataset.W)
-                                diff = np.repeat(diff.detach().abs().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)  
-                                syn_event_acc = np.repeat(list_syn_event_acc[m].detach().abs().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2) 
+                                diff = np.repeat(diff.detach().abs().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
+                                syn_event_acc = np.repeat(list_syn_event_acc[m].detach().abs().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
                                 img_ev_start = np.repeat(list_img_ev_start[m].detach().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
                                 img_ev_end = np.repeat(list_img_ev_end[m].detach().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
                             else:
@@ -2328,112 +1992,65 @@ class SLAM():
                                 img_ev_end = list_img_ev_end[m].detach().cpu().numpy()
                                 syn_event_acc = list_syn_event_acc[m].detach().abs().cpu().numpy()
                                 diff = diff.detach().cpu().numpy()
-                            
+
                             image_combined = np.concatenate([img_ev_start,img_ev_end, gt_events_acc, syn_event_acc, diff], axis=1)
                             images_combined.append(image_combined)
-                        
+
                         images_combined = np.concatenate(images_combined, axis=0)
                         images_combined =  to8b(images_combined)
-                        img_path = os.path.join(save_path, f"BA_f{frame_id_vis:03}_{i:04}" + "_img.jpg")  
+                        img_path = os.path.join(save_path, f"BA_f{frame_id_vis:03}_{i:04}" + "_img.jpg")
                         imageio.imwrite(img_path, images_combined)
-        
+
         if self.config["use_relative_pose_to_opt"]==1:
             active_ctrl_knot_se3 = (active_ctrl_knot_se3_base.Exp()*active_ctrl_knot_se3_rel_opt.Exp()).Log()
         elif self.config["use_relative_pose_to_opt"]==2:
             active_ctrl_knot_se3 = (ctrl_knot_se3_rel_opt.Exp()*ctrl_knot_se3_base.Exp()).Log()
-        
+
         # update est_poses
         for n in range(active_num_batch):
             k = active_frame_id_all[n]
-            ts = active_frame_ts_all[n]                      
+            ts = active_frame_ts_all[n]
             self.est_c2w_data[k] = self.get_poses_lie(active_ctrl_knot_se3, active_ctrl_knot_ts, ts, mode=traj_mode).matrix().cuda()
             self.est_c2w_ts[k] = ts
-        
+
         if self.config["visualize_inter_img"] or _global_BA:
             if self.config["render_eventview_img"]:
-                # render ALL images 
+                # render ALL images
                 with torch.no_grad():
                     for n in range(active_num_batch):
                         k = active_frame_id_all[n]
-                        ts = active_frame_ts_all[n]                      
+                        ts = active_frame_ts_all[n]
                         T_SE3 = self.get_poses_lie(active_ctrl_knot_se3, active_ctrl_knot_ts, ts, mode=traj_mode)
-                        
+
                         c2w_ = T_SE3.matrix().unsqueeze(0).cuda()  #[1, 4, 4]
                         rendered_img = self.rasterize_splats(camtoworlds=c2w_, render_mode="RGB+ED")["image"]
-                                
-                                
+
+
                         event_img_ = rendered_img.detach().cpu().numpy()
                         event_img_ =  to8b(event_img_)
                         im_name = f"BA_f{frame_id_vis:03}_f{k}" + "_img.jpg"
                         imageio.imwrite(os.path.join(save_path, im_name), event_img_)
-                        
-                        # if self.config["render_tumvie_rgbCam_img"] and self.config["dataset"]=="tum_vie":
-                        #     # render rbg camera image
-                        #     img_rgbCam = self.render_with_gsplat(self.gs_model, T_se3, render_tumvie_rgb=True)['image']
-                        #     img_rgbCam = np.repeat(img_rgbCam.detach().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
-                        #     img_path = os.path.join(save_path, f"BA_f{frame_id_vis:03}_f{k}" + "_img_rgbCam.jpg")  
-                        #     imageio.imwrite(img_path, to8b(img_rgbCam))
-            # plot the whole trajectory
+
             if self.config["dataset"] == "rpg_evo":
                 self.pose_gt = self.est_c2w_data
             pose_evaluation(self.pose_gt, self.est_c2w_data, 1, save_path, "pose", f"BA_f{frame_id_vis:03}_whole")
             save_pose_as_kitti_evo(self.pose_gt, self.est_c2w_data, save_path, f"BA_f{frame_id_vis:03}_whole")
-        
-        
+
+
         # save control knot pose
         for ii in range(len(active_ctrl_knot_idx)):
             idx = active_ctrl_knot_idx[ii]
             self.ctrl_knot_se3_all[idx] = active_ctrl_knot_se3[ii].detach().clone()  # [], cuda
-        
+
         print("======================= finished BA  =========================")
-        
+
 
     def validate_depth_and_pose(self, accumulated_data_chunks):
         import cv2
 
-        ## Data from Wang Peng
-        # fx = 600 
-        # fy = 600 
-        # cx = 599.5 
-        # cy = 339.5 
-        # H = 680
-        # W = 1200 
-        
-        # T_Rt_src = torch.tensor([[9.062491181555123454e-01, -2.954311239679592860e-01, 3.023788796086531172e-01, -3.569159214564542326e-01], 
-        #                          [-4.227440547687880690e-01, -6.333245673155291078e-01, 6.482186796076164770e-01, -6.602722315763628336e-01],
-        #                          [8.759610522377010340e-17, -7.152764804085384176e-01, -6.988415818870352680e-01, 8.192365926179191460e-01],
-        #                          [0.000000000000000000e+00, 0.000000000000000000e+00, 0.000000000000000000e+00, 1.000000000000000000e+00]], device=self.device)
-        
-        # T_Rt_tar = torch.tensor([[9.381357201392316325e-01, -2.130208192217611096e-01, 2.729899287097143912e-01, -2.456696751290185499e-01],
-        #                          [-3.462677729717930086e-01, -5.771326564125134340e-01, 7.396056559433482613e-01, -6.169610161336236409e-01],
-        #                          [9.654847158446050965e-17, -7.883780993155031780e-01, -6.151910049079671872e-01, 7.409320022634876546e-01],
-        #                          [0.000000000000000000e+00, 0.000000000000000000e+00, 0.000000000000000000e+00, 1.000000000000000000e+00]], device=self.device)
-        
-        # img_src = cv2.imread('output/replica_test_init_rot/images_poses/frame000000.jpg', cv2.IMREAD_UNCHANGED)  #accumulated_data_chunks[idx_src]['rgb'][0].cpu().numpy()
-        # img_tar = cv2.imread('output/replica_test_init_rot/images_poses/frame000010.jpg', cv2.IMREAD_UNCHANGED)  #accumulated_data_chunks[idx_tar]['rgb'][0].cpu().numpy()
-        
-        ## Data from Jian Huang 
-        # fx = 384 
-        # fy = 384 
-        # cx = 384 
-        # cy = 240 
-        
-        # T_Rt_src = torch.eye(4).to(self.device)
-        # T_Rt_tar = torch.eye(4).to(self.device)
-
-        # T_Rt_src[:3,:4] = torch.from_numpy(poses[0][:12]).reshape(3,4).to(self.device)
-        # T_Rt_tar[:3,:4] = torch.from_numpy(poses[20][:12]).reshape(3,4).to(self.device)
-        
-
-        ##
-        # fx = self.dataset.fx
-        # fy = self.dataset.fy
-        # cx = self.dataset.cx
-        # cy = self.dataset.cy 
-
         idx_src = 1
         idx_tar = 4
-        
+
         T_Rt_src = torch.eye(4).to(self.device)
         T_Rt_tar = torch.eye(4).to(self.device)
 
@@ -2448,49 +2065,13 @@ class SLAM():
 
         depth_src = accumulated_data_chunks[idx_src]['depth_maps'][0]
         depth_tar = accumulated_data_chunks[idx_tar]['depth_maps'][0]
-        
-        ## 
-        # px_tar_x = 200
-        # px_tar_y = 280        
-        
-        # npx_tar_x = (px_tar_x - cx) / fx
-        # npx_tar_y = (px_tar_y - cy) / fy
 
-        # cv2.circle(img_tar, (px_tar_x, px_tar_y), 5, (255,0,0), 2)
-        
-        # for i in range(1000):
-        #     depth = i * 0.01
-        #     # depth = depth_tar[px_tar_y, px_tar_x]
-        #     cpx_tar_x = npx_tar_x * depth
-        #     cpx_tar_y = npx_tar_y * depth
-        #     cpx_tar_z = depth
-            
-        #     T_Rt_tar2src = torch.linalg.inv(T_Rt_src) @ T_Rt_tar
-            
-        #     cpx_src_xyz = T_Rt_tar2src @ torch.tensor([cpx_tar_x, cpx_tar_y, cpx_tar_z, 1.], device=self.device, dtype=T_Rt_tar2src.dtype).unsqueeze(-1)
-            
-        #     npx_src_x = cpx_src_xyz[0] / cpx_src_xyz[2]
-        #     npx_src_y = cpx_src_xyz[1] / cpx_src_xyz[2]
-            
-        #     px_src_x = npx_src_x * fx + cx
-        #     px_src_y = npx_src_y * fy + cy
-    
-        #     # draw circle 
-        #     cv2.circle(img_src, (int(px_src_x), int(px_src_y)), 2, (255,0,0), 2)
-
-        # img_combined = np.concatenate([img_src, img_tar], axis=1)
-        # img_combined = to8b(img_combined)
-
-        # img_path = os.path.join(self.config["data"]["output"], self.config["data"]["exp_name"], "validate_pose_and_depth.jpg")
-        # imageio.imwrite(img_path, img_combined)
-
-        # warp image        
         syn_img_src, syn_msk_src = self.warp_image(T_se3_src, T_se3_tar, depth_src, img_tar)
 
         image_combined0 = torch.cat([img_src.mean(dim=2), img_tar.mean(dim=2)], dim=1)
         image_combined1 = torch.cat([1./depth_src, 1./depth_tar], dim=1)
         image_combined2 = torch.cat([syn_img_src.mean(dim=2), syn_msk_src * (img_src - syn_img_src).abs().mean(dim=2)], dim=1)
-        
+
         image_combined = torch.cat([image_combined0, image_combined1, image_combined2], dim=0)
 
         image_combined = image_combined.cpu().numpy()
@@ -2500,31 +2081,31 @@ class SLAM():
 
         sys
 
-        return 
-    
+        return
+
     def tracking(self, cur_frame_id, tracking_batch, niter=1000):
         num_batch = len(tracking_batch)
-        
+
         print(f"Tracking frame{cur_frame_id-num_batch+1} to frame{cur_frame_id}")
-        
+
         frame_ts_all = []
         frame_id_all = []
         events_all = []
         for i in range(num_batch):
             fid_ = tracking_batch[i]["frame_id"].item()
             frame_ts = tracking_batch[i]["pose_ts"].item()
-            
+
             frame_id_all.append(fid_)
             frame_ts_all.append(frame_ts)
-            
+
             cur_event = tracking_batch[i]['events'].squeeze()
             events_all.append(cur_event.to(self.device))
         events_all = torch.cat(events_all, dim=0)
-        
+
         t_data_start = events_all[0][2].item()
         t_data_end = events_all[-1][2].item()
-        
-        # control knot management        
+
+        # control knot management
         active_ctrl_knot_idx = []
         for ii in range(len(frame_id_all)):
             print("add a new control knot")
@@ -2537,30 +2118,27 @@ class SLAM():
                 else:
                     # predict next control pose
                     self.ctrl_knot_se3_all[idx_] = self.predict_pose_se3_lie(self.ctrl_knot_se3_all[idx_-1], self.ctrl_knot_se3_all[idx_-2])
-        
+
         if frame_ts_all[-1]>t_data_end:
             print(f"&&&&&&&&&&&        WARNNING: t_data_end-frame_ts_all[-1]={t_data_end-frame_ts_all[-1]}    &&&&&&&&&&&")
             print("&&&&&&&&&&&        Hard assignment:  frame_ts_all[-1] = t_data_end-1e-4    &&&&&&&&&&&")
             frame_ts_all[-1] = t_data_end-1e-4
-        
+
         active_ctrl_knot_idx.insert(0, active_ctrl_knot_idx[0]-1)
         ctrl_knot_ts = []
         for idx_ in active_ctrl_knot_idx:
             ctrl_knot_ts.append(self.ctrl_knot_ts_all[idx_])
-        # ctrl_knot_len = len(active_ctrl_knot_idx)
-        
-        # change to 2-knot batch tracking mode
         ctrl_knot_len = 2
         active_ctrl_knot_idx_src = active_ctrl_knot_idx.copy()
         ctrl_knot_ts_src = ctrl_knot_ts.copy()
         active_ctrl_knot_idx = [active_ctrl_knot_idx[0], active_ctrl_knot_idx[-1]]
         ctrl_knot_ts = [ctrl_knot_ts[0], ctrl_knot_ts[-1]]
-        
+
         t_event_min = events_all[:, 2].min().cpu().numpy()
         t_event_max = events_all[:, 2].max().cpu().numpy()
         ctrl_knot_ts[0] = t_event_min-1e-6
         ctrl_knot_ts[-1] = t_event_max+1e-6
-        
+
         if self.config["use_relative_pose_to_opt"]==1:
             ctrl_knot_se3_rel_opt = pp.identity_se3(ctrl_knot_len) #LieTensor
             ctrl_knot_se3_base = pp.identity_se3(ctrl_knot_len)
@@ -2574,10 +2152,10 @@ class SLAM():
             for ii in range(ctrl_knot_len):
                 idx_ = active_ctrl_knot_idx[ii]
                 ctrl_knot_se3[ii] = self.ctrl_knot_se3_all[idx_]
-            ctrl_knot_se3 = torch.nn.Parameter(ctrl_knot_se3, requires_grad=True)        
+            ctrl_knot_se3 = torch.nn.Parameter(ctrl_knot_se3, requires_grad=True)
             pose_optimizer = torch.optim.Adam([{"params": ctrl_knot_se3, "lr": self.config['pose_lr']}])
         elif self.config["use_relative_pose_to_opt"]==2:  # fix the first pose
-            ctrl_knot_se3_base = self.ctrl_knot_se3_all[active_ctrl_knot_idx[0]-1] 
+            ctrl_knot_se3_base = self.ctrl_knot_se3_all[active_ctrl_knot_idx[0]-1]
             ctrl_knot_se3_rel_opt = pp.identity_se3(ctrl_knot_len)
             for ii in range(ctrl_knot_len):
                 ctrl_knot_se3_rel_opt[ii] = (self.ctrl_knot_se3_all[active_ctrl_knot_idx[ii]].Exp()*(ctrl_knot_se3_base.Inv().Exp())).Log()
@@ -2590,16 +2168,15 @@ class SLAM():
         num_totel_events = events_all.shape[0]
         _num_events_for_optim = self.config["num_events_window_for_tracking"]
         num_events_to_skip = self.config["num_events_to_skip"]
-        
-        # num_events_for_optim = np.min([num_totel_events-1, _num_events_for_optim])
+
         num_events_for_optim = np.min([_num_events_for_optim, num_totel_events-2*num_events_to_skip])-1
         print(f"*******************************  events_num: {num_totel_events}  *********************************")
         print(f"************************  N_window for init: {num_events_for_optim}  ***************")
-        prev_loss = 1e6 
-        
+        prev_loss = 1e6
+
         mask_boundary_size = self.config["mask_boundary_size"]
         blur_sigma = self.config["blur_sigma"]
-        
+
         linlog_thres = self.config["event"]["linlog_thres"]
         for i in range(niter):
             if i%100 == 0:
@@ -2608,9 +2185,9 @@ class SLAM():
                 ctrl_knot_se3 = (ctrl_knot_se3_base.Exp()*ctrl_knot_se3_rel_opt.Exp()).Log()
             elif self.config["use_relative_pose_to_opt"]==2:
                 ctrl_knot_se3 = (ctrl_knot_se3_rel_opt.Exp()*ctrl_knot_se3_base.Exp()).Log()
-            
+
             # sample random chunks of events with num_events_for_optim events in total
-            
+
             idx_ev_start = np.random.randint(num_events_to_skip, num_totel_events-num_events_for_optim-num_events_to_skip)
             t_ev_start = events_all[idx_ev_start][2].item()
             t_ev_end = events_all[idx_ev_start + num_events_for_optim][2].item()
@@ -2618,23 +2195,23 @@ class SLAM():
             # interpolate event start pose + end pose
             T_SE3_ev_start = self.get_poses_lie(ctrl_knot_se3, ctrl_knot_ts, t_ev_start, mode='linear')
             T_SE3_ev_end = self.get_poses_lie(ctrl_knot_se3, ctrl_knot_ts, t_ev_end, mode='linear')
-            
+
             # forward
             c2w_start = T_SE3_ev_start.matrix().unsqueeze(0).cuda()  #[1, 4, 4]
             render_pkg_start = self.rasterize_splats(camtoworlds=c2w_start, render_mode="RGB")
             c2w_end = T_SE3_ev_end.matrix().unsqueeze(0).cuda()  #[1, 4, 4]
             render_pkg_end = self.rasterize_splats(camtoworlds=c2w_end, render_mode="RGB")
-            
+
             img_ev_start = render_pkg_start["image"]
             img_ev_end = render_pkg_end["image"]
-            
+
             if self.config["use_linLog"]:
                 pred_linlog_start = lin_log(img_ev_start*255, linlog_thres=linlog_thres) # (B, Nevs, 1)
                 pred_linlog_end = lin_log(img_ev_end*255, linlog_thres=linlog_thres) # (B, Nevs, 1)
                 syn_event_acc = pred_linlog_end - pred_linlog_start
             else:
                 syn_event_acc = (log(img_ev_end) - log(img_ev_start))
-            
+
             # compute event loss
             with torch.no_grad():
                 gt_events_acc = self.post_process_event_image(events_all[idx_ev_start:idx_ev_start+num_events_for_optim, :], _sigma=blur_sigma)
@@ -2642,14 +2219,14 @@ class SLAM():
                     mask = (gt_events_acc.abs() > 0.1).double().detach()
                 else:
                     mask = torch.ones_like(gt_events_acc)
-                
+
                 mask_boundary = torch.ones_like(mask)
                 mask_boundary[:mask_boundary_size,:] = 0
                 mask_boundary[-mask_boundary_size:,:] = 0
                 mask_boundary[:,:mask_boundary_size] = 0
                 mask_boundary[:,-mask_boundary_size:] = 0
                 mask = mask * mask_boundary
-                
+
                 # visibility mask
                 alpha_start = render_pkg_start["alpha"]
                 alpha_start = alpha_start[0][:,:,0]  # [H, W]
@@ -2657,14 +2234,11 @@ class SLAM():
                 alpha_end = alpha_end[0][:,:,0]  # [H, W]
                 tracking_mask_alpha_threshold = self.config["mapping"]["tracking_mask_alpha_threshold"]
                 visibility_mask = ((alpha_start > tracking_mask_alpha_threshold)*(alpha_end > tracking_mask_alpha_threshold)).double().detach()
-                
+
                 mask = mask * visibility_mask
-                
-                # if self.config["dataset"] == "vector":
-                #     mask = mask * self.vector_mask
-#=================================================================================================#
+
                 if self.config["use_uncertainty_in_Tracking"]:
-                    # check uncertainty 
+                    # check uncertainty
                     img_uncertainty = 1./ (render_pkg_start['uncertainty'] * render_pkg_end['uncertainty'] + 1.0)
                     mask = mask * img_uncertainty
 #=================================================================================================#
@@ -2679,26 +2253,19 @@ class SLAM():
                 loss_ssim = compute_ssim_loss(gt_events_acc, syn_event_acc, channel=3)
             else:
                 loss_ssim = compute_ssim_loss(mask*gt_events_acc, mask*syn_event_acc, channel=1)
-            
+
             factor_ = self.config["mapping"]["ssim_loss_factor_"]
             loss_event = (1-factor_)*loss_event
             loss_ssim = factor_*loss_ssim
 
             loss_total = loss_event + loss_ssim
 
-            # # TODO:check early break criteria
-            # if loss_event > prev_loss * 1.5:
-            #     print('[tracker]: early break at iteration:', i, 'prev_loss:', prev_loss, 'cur_loss:', loss_event.item())
-            #     break
-            # prev_loss = loss_event.item()
-            
-            # backward
             pose_optimizer.zero_grad()
             loss_total.backward()
             torch.cuda.synchronize()
             if self.config["opt_pose"]:
                 pose_optimizer.step()
-            
+
             # visualization
             if i % 100 == 0 and self.config["visualize_inter_img"]:
                 tracking_info_ = f"iter {i}, loss={loss_total.item()}, event={loss_event.item()}, ssim={loss_ssim.item()}"
@@ -2711,16 +2278,14 @@ class SLAM():
                         syn_event_acc = syn_event_acc*mask
                         img_ev_start = img_ev_start*mask
                         img_ev_end = img_ev_end*mask
-                        
+
                         # visualize event map using red-blue image
                         diff = (gt_events_acc - syn_event_acc) * 2
-                        
+
                         if self.config["mapping"]["color_channels"] == 1:
-                            diff = np.repeat(diff.detach().abs().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)  
-                            # render_ev_accumulation(diff.cpu().numpy(), self.dataset.H, self.dataset.W)
+                            diff = np.repeat(diff.detach().abs().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
                             gt_events_acc = render_ev_accumulation(gt_events_acc.cpu().numpy(), self.dataset.H, self.dataset.W)
-                            syn_event_acc = np.repeat(syn_event_acc.detach().abs().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2) 
-                            # render_ev_accumulation(syn_event_acc.cpu().numpy(), self.dataset.H, self.dataset.W)
+                            syn_event_acc = np.repeat(syn_event_acc.detach().abs().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
                             img_ev_start = np.repeat(img_ev_start.detach().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
                             img_ev_end = np.repeat(img_ev_end.detach().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
                             mask = torch.tile(mask[:,:,None], (1,1,3))
@@ -2730,28 +2295,28 @@ class SLAM():
                             img_ev_end = img_ev_end.detach().cpu().numpy()
                             syn_event_acc = syn_event_acc.detach().cpu().numpy()
                             diff = diff.detach().cpu().numpy()
-                        
+
                         image_combined = np.concatenate([img_ev_start,img_ev_end, gt_events_acc, syn_event_acc, diff], axis=1)
                         image_combined =  to8b(image_combined)
                         frame_id = cur_frame_id
                         im_name = f"tracking_f{frame_id:03}_{i:04}_img.jpg"
                         imageio.imwrite(os.path.join(path_to_save, im_name), image_combined)
-                        
+
                         # visualize mask
                         alpha_end = torch.tile(alpha_end[:,:,None], (1,1,3))
                         alpha_img_end = alpha_end.detach().cpu().numpy()
                         alpha_start = torch.tile(alpha_start[:,:,None], (1,1,3))
                         alpha_img_start = alpha_start.detach().cpu().numpy()
-                        
+
                         alpha_start_mask = (alpha_start > 0.8).double().detach()
                         alpha_start_mask = alpha_start_mask.detach().cpu().numpy()
-                        
+
                         alpha_end_mask = (alpha_end > 0.8).double().detach()
                         alpha_end_mask = alpha_end_mask.detach().cpu().numpy()
-                        
+
                         visibility_mask = torch.tile(visibility_mask[:,:,None], (1,1,3))
                         vis_mask_img = visibility_mask.detach().cpu().numpy()
-                        
+
                         mask_img = mask.detach().cpu().numpy()
                         mask_img1 = np.concatenate([alpha_img_start, alpha_img_end, mask_img], axis=1)
                         mask_img2 = np.concatenate([alpha_start_mask, alpha_end_mask, vis_mask_img], axis=1)
@@ -2759,8 +2324,7 @@ class SLAM():
                         tracking_mask_img =  to8b(tracking_mask_img)
                         im_name = f"tracking_f{frame_id:03}_{i:04}_mask_img.jpg"
                         imageio.imwrite(os.path.join(path_to_save, im_name), tracking_mask_img)
-                    
-                    # self.est_c2w_data[cur_frame_id] = se3_to_SE3_m44(self.get_poses(mutable_control_knot_poses, ctrl_knot_ts, frame_ts, mode='linear'))
+
                     for ii in range(len(frame_ts_all)):
                         ts = frame_ts_all[ii]
                         idx = frame_id_all[ii]
@@ -2769,23 +2333,20 @@ class SLAM():
                         self.pose_gt = self.est_c2w_data
                     pose_evaluation(self.pose_gt, self.est_c2w_data, 1, path_to_save,"pose", f"tracking_f{frame_id:03}_{i:04}")
                     save_pose_as_kitti_evo(self.pose_gt, self.est_c2w_data, path_to_save, f"tracking_f{frame_id:03}_{i:04}")
-        
+
         if self.config["use_relative_pose_to_opt"]==1:
             ctrl_knot_se3 = (ctrl_knot_se3_base.Exp()*ctrl_knot_se3_rel_opt.Exp()).Log()
         elif self.config["use_relative_pose_to_opt"]==2:
             ctrl_knot_se3 = (ctrl_knot_se3_rel_opt.Exp()*ctrl_knot_se3_base.Exp()).Log()
-        
+
         # update est_poses
         for ii in range(len(frame_ts_all)):
             ts = frame_ts_all[ii]
             idx = frame_id_all[ii]
             self.est_c2w_data[idx] = self.get_poses_lie(ctrl_knot_se3, ctrl_knot_ts, ts, mode='linear').matrix()
             self.est_c2w_ts[idx] = ts
-        
-        # save control knot pose
-        # self.ctrl_knot_se3_all[cur_frame_id-1] = mutable_control_knot_poses[0].detach().clone()  # [], cuda # TODO: 保存这个control knot pose后，轨迹反而不好，待研究
+
         for ii in range(len(active_ctrl_knot_idx)):
-            # if self.config["use_relative_pose_to_opt"]!=2:
             if ii==0:
                 continue
             idx = active_ctrl_knot_idx[ii]
@@ -2796,12 +2357,12 @@ class SLAM():
             ts = ctrl_knot_ts_src[ii]
             idx = active_ctrl_knot_idx_src[ii]
             self.ctrl_knot_se3_all[idx] = self.get_poses_lie(ctrl_knot_se3, ctrl_knot_ts, ts, mode='linear').Log().detach().clone()  # se3,lieTensor, cuda
-        
+
         print("======================= finished tracking  =========================")
 
 
     def get_cspline(self, T_se3_poses, pose_ts, niters, t_offset=0.005):
-        # construct spline control_knots 
+        # construct spline control_knots
         control_knot_poses = torch.zeros(4, 6, device=self.device).float()
         control_knot_poses[0] = T_se3_poses[0].detach() - 1e-4
         control_knot_poses[1] = T_se3_poses[0].detach()
@@ -2814,7 +2375,7 @@ class SLAM():
         control_knot_ts = [t_start-delta_t, t_start, t_start+delta_t, t_start+2 * delta_t]
         control_knot_ts = [sum(x) for x in zip(control_knot_ts, offset)]
 
-        control_knot_poses = torch.nn.Parameter(control_knot_poses, requires_grad=True)      
+        control_knot_poses = torch.nn.Parameter(control_knot_poses, requires_grad=True)
         spline_optimizer = torch.optim.Adam([{"params": control_knot_poses, "lr": 0.001}])
 
         for i in range(niters):
@@ -2822,7 +2383,7 @@ class SLAM():
             for j in range(len(pose_ts)):
                 inter_pose = self.get_poses(control_knot_poses, control_knot_ts, pose_ts[j], 'cspline')
                 loss = loss + ((inter_pose - T_se3_poses[j].detach()) ** 2).mean()
-            
+
             spline_optimizer.zero_grad()
             loss.backward()
             spline_optimizer.step()
@@ -2830,7 +2391,7 @@ class SLAM():
             print('[get_cspline] iter:', i, loss.item())
 
         return control_knot_poses.detach(), control_knot_ts
-    
+
     def convert_linear_to_cspline(self, ctrl_poses_se3, ctrl_ts, niters):
         t_start = ctrl_ts[0]
         t_end = ctrl_ts[-1]
@@ -2841,7 +2402,7 @@ class SLAM():
 
         return self.get_cspline(T_se3_poses, pose_ts, niters, 0.005)
 
-    
+
     def init_with_GT_data(self, _chunks_event, _chunks_GT_Rts, _chunks_depth_maps):
         # initialize gaussian scene
         points = []
@@ -2861,7 +2422,7 @@ class SLAM():
             ctrl_knot_se3[1] = ctrl_knot_se3[1] + SE3_to_se3(_chunks_GT_Rts[i][0])
             ctrl_knot_se3[2] = ctrl_knot_se3[2] + SE3_to_se3(_chunks_GT_Rts[i][-1])
             ctrl_knot_se3[3] = ctrl_knot_se3[3] + SE3_to_se3(_chunks_GT_Rts[i][-1])
-            
+
             ctrl_knot_ts = [t_start-t_delta-0.015, t_start-0.005, t_end+0.005, t_end+t_delta+0.015]
 
             chunks_control_knot_se3.append(ctrl_knot_se3)
@@ -2881,12 +2442,12 @@ class SLAM():
         self.gs_model.create_from_tensor_pcd(point_cloud, spatial_lr_scale=1.0)
         self.gs_model.training_setup(self.gs_opt_cfg)
         return chunks_control_knot_se3, chunks_control_knot_ts
-    
+
     def run_with_initialization(self):
         self.setup_seed(20)
 
         num_frames_to_skip = 151
-        
+
         init_num_chunks = 5
         init_chunk_len = 5
         init_chunk_skip = 0
@@ -2905,19 +2466,19 @@ class SLAM():
         accum_events = []
         accum_est_poses_se3 = []
         accum_est_poses_ts = []
-        
-        # start optimization 
+
+        # start optimization
         data_loader = DataLoader(self.dataset, num_workers=self.config['data']['num_workers'])
 
         for i, batch in tqdm(enumerate(data_loader)):
             if i < num_frames_to_skip:
-                continue 
+                continue
 
-            # accumulate data for initialization 
+            # accumulate data for initialization
             if i < num_frames_to_skip + init_chunk_len * init_num_chunks + init_chunk_skip * (init_num_chunks-1):
                 if len(chunks_event) > 0 and len(chunks_event) % init_chunk_len == 0 and mutable_init_chunk_skip > 0:
                     mutable_init_chunk_skip = mutable_init_chunk_skip - 1
-                    continue 
+                    continue
 
                 mutable_init_chunk_skip = init_chunk_skip
 
@@ -2933,11 +2494,11 @@ class SLAM():
                     chunks_depth_maps = [chunks_depth_maps[j:j+init_chunk_len] for j in range(0, len(chunks_depth_maps), init_chunk_len)]
 
                     if True:
-                        chunks_ctrl_se3, chunks_ctrl_ts = self.init_with_GT_data(chunks_event, chunks_GT_Rts, chunks_depth_maps) 
+                        chunks_ctrl_se3, chunks_ctrl_ts = self.init_with_GT_data(chunks_event, chunks_GT_Rts, chunks_depth_maps)
                     else:
                         self.gs_model.load_ply('./output/replica_test_with_GT_pose_depth_init/model/point_cloud.npy')
                         self.gs_model.training_setup(self.gs_opt_cfg)
-                
+
                         ctrl_knot_poses = torch.from_numpy(np.load('./output/replica_test_with_GT_pose_depth_init/model/control_knots.npy')).to(self.device)
                         ctrl_knot_ts = torch.from_numpy(np.load('./output/replica_test_with_GT_pose_depth_init/model/control_knots_ts.npy')).to(self.device)
 
@@ -2947,7 +2508,7 @@ class SLAM():
                     bConverted=True
                     chunks_traj_mode = ['cspline' for k in range(len(chunks_event))]
                     GT_poses_Rt, est_poses_Rt, _ = self.bundle_adjustment(chunks_event, chunks_ctrl_se3, chunks_ctrl_ts, chunks_traj_mode, chunks_GT_Rts, chunks_pose_ts, 2501)
-                
+
                 pred_pose = self.predict_current_pose(est_poses_Rt[-1], est_poses_Rt[-2])
                 est_pose, pose_ts = self.tracking(batch, GT_poses_Rt, est_poses_Rt, est_poses_Rt[-1], pred_pose, 101)
 
@@ -2962,7 +2523,7 @@ class SLAM():
                 if len(accum_events) == 10:
                     new_pcd = self.create_densify_points(accum_events[-1], accum_est_poses_se3[-2], accum_est_poses_se3[-1])
                     self.gs_model.add_new_points(new_pcd, 1.0)
-                    
+
                     # get input data for chunk_BA
                     seg_events = torch.cat(accum_events[-5:], dim=0)
                     seg_ctrl_se3, seg_ctrl_ts = self.get_cspline(accum_est_poses_se3[-6:], accum_est_poses_ts[-6:], niters=20)
@@ -2986,139 +2547,76 @@ class SLAM():
                     chunks_ctrl_se3[-5:] = refined_ctrl_se3
                     self.gs_model.prune_transparent_points(min_opacity=0.02)
 
-                # self.get_cspline(est_poses_se3_tracking[-5:], est_poses_ts_tracking[-5:], niters=5)
-            
-    def run(self): 
-        # self.setup_seed(20)
-        
+    def run(self):
         init_batch = []
         BA_batch = []
         tracking_batch = []
         BA_count_cnt = 0
         creat_new_gs_cnt = 0
-        
+
         num_optim_steps_tracking = self.config["num_opti_steps_for_tracking"]
         num_optim_steps_BA = self.config["num_opti_steps_for_BA"]
         num_opti_steps_for_global_BA = self.config["num_opti_steps_for_global_BA"]
         num_opti_steps_for_final_global_BA = self.config["num_opti_steps_for_final_global_BA"]
         refine_img_rendering_ = self.config["refine_img_rendering_"]
-        
+
         # variable for initialization
         bInitIsDone = False
 
-        # start optimization 
+        # start optimization
         data_loader = DataLoader(self.dataset, num_workers=self.config['data']['num_workers'])
 
         for i, batch in tqdm(enumerate(data_loader)):
             cur_frame_id = batch["frame_id"].item()
-            
+
             BA_batch.append(batch)
             if(len(BA_batch) > 100):
                 BA_batch.pop(0)
-            
+
             if bInitIsDone==False:
                 init_batch.append(batch)
-                
+
                 if len(init_batch) < self.config["initialization"]['num_frames_for_init']:
                     continue
-                
+
                 # estimate the depth_map
                 depth_estimation_init_flag = self.config["depth_estimation_init"]
                 if depth_estimation_init_flag==0:
                     print("************************ Don't use depth initialization ************************")
                     depth_map = None
-                # elif depth_estimation_init_flag==1:
-                #     print("************************ Estimate depth during initialization ************************")
-                    
-                #     # depth estimation
-                #     from PIL import Image
-                #     from diffusers import DiffusionPipeline
-                #     from diffusers.utils import load_image
-                    
-                #     self.initialization(init_batch, niters=self.config['num_opti_steps_for_depthEst_init'], traj_mode='linear', depth_map=None)
-                    
-                #     pipe = DiffusionPipeline.from_pretrained(
-                #                 # torch_dtype=torch.float16,                # (optional) Run with half-precision (16-bit float).
-                #                 local_files_only=True
-                #             )
-                #     pipe.to("cuda")
-                    
-                #     bDepthIsEst = True
-                    
-                #     init_path = os.path.join(self.config["data"]["output"], self.config["data"]["exp_name"], 'initialization')
-                #     save_dir_path = os.path.join(self.config["data"]["output"], self.config["data"]["exp_name"])
-                #     img_path = os.path.join(init_path, f"frame{cur_frame_id}_init.jpg")
-                #     image: Image.Image = load_image(img_path)
-                #     pipeline_output = pipe(
-                #                             image,                  # Input image.
-                #                             # denoising_steps=30,     # (optional) Number of denoising steps of each inference pass. Default: 10.
-                #                             # ensemble_size=10,       # (optional) Number of inference passes in the ensemble. Default: 10.
-                #                             # processing_res=768,     # (optional) Maximum resolution of processing. If set to 0: will not resize at all. Defaults to 768.
-                #                             # match_input_res=True,   # (optional) Resize depth prediction to match input resolution.
-                #                             # batch_size=10,           # (optional) Inference batch size, no bigger than `num_ensemble`. If set to 0, the script will automatically decide the proper batch size. Defaults to 0.
-                #                             # color_map="Spectral",   # (optional) Colormap used to colorize the depth map. Defaults to "Spectral". Set to `None` to skip colormap generation.
-                #                             # show_progress_bar=True, # (optional) If true, will show progress bars of the inference progress.
-                #                         )
-                #     depth: np.ndarray = pipeline_output.depth_np                    # Predicted depth map
-                #     depth_colored: Image.Image = pipeline_output.depth_colored      # Colorized prediction
-                #     shutil.copy(img_path, os.path.join(save_dir_path, f"init_{cur_frame_id}_rendered_img.jpg"))
-                #     # Save as uint16 PNG
-                #     depth_uint16 = (depth * 65535.0).astype(np.uint16)
-                #     Image.fromarray(depth_uint16).save(os.path.join(save_dir_path, "./depth_map.png"), mode="I;16")
-                #     # save numpy data
-                #     np.save(os.path.join(save_dir_path, "./depth_data.npy"), depth)
-                #     # Save colorized depth map
-                #     depth_colored.save(os.path.join(save_dir_path, "./depth_colored.png"))
-                    
-                #     # release the GPU memory
-                #     del pipe
-                #     torch.cuda.empty_cache()
-                    
-                #     depth_path = os.path.join(save_dir_path, "depth_data.npy")
-                #     print('[initialization]: load depth map from', depth_path)
-                #     depth_map = torch.from_numpy(np.load(depth_path)).to(self.device)
-            #======================================================================================================#
-                # elif depth_estimation_init_flag==1:
-                #     if self.depth_model is None:
-                #     first_frame_events=init_batch[0]['events'].squeeze().to(self.device)
-                #     depth_map=self.estimate_depth_from_events(first_frame_events)
-                #     if self.config.get('save_init_depth',False):
-                #         save_path = os.path.join(self.config["data"]["output"], self.config["data"]["exp_name"], "initialization")
                 elif depth_estimation_init_flag == 1:
                     print("********************* estimate depth using DERD-Net **************************")
                     if self.derdnet_model is None:
                         self.load_derdnet_model()
-                    # 将多个初始化帧的事件合并（因为 DERD-Net 需要一段事件流）
                     all_init_events = torch.cat([b['events'].squeeze().to(self.device) for b in init_batch], dim=0)
                     t_start = all_init_events[:, 2].min()
                     t_end = all_init_events[:, 2].max()
                     depth_map = self.estimate_depth_map_derdnet(all_init_events, t_start, t_end)
             #======================================================================================================#
-			
+
                 elif depth_estimation_init_flag==2:
                     print("************************ Estimate depth during initialization ************************")
                     depth_path = self.config["initialization"]["depth_path"]
                     print('[initialization]: load depth map from', depth_path)
                     depth_map = torch.from_numpy(np.load(depth_path)).to(self.device)
-                
+
                 # initialize...
                 self.initialization(init_batch, niters=self.config['num_opti_steps_for_init'], traj_mode='linear', depth_map=depth_map)
-                
+
                 bInitIsDone = True
             else:
                 if self.config["initOnly"]:
-                    # exit(0)
                     break
                 print("Process frame", i+1)
-                
+
                 tracking_batch.append(batch)
-                
+
                 if len(tracking_batch) >= self.config["tracking_batch_size"]:
                     BA_count_cnt = BA_count_cnt+1
-                    # tracking 
+                    # tracking
                     self.tracking(cur_frame_id, tracking_batch, num_optim_steps_tracking)
                     tracking_batch = []
-                
+
                 if BA_count_cnt >= self.config["BA_every_track"]:
                     BA_count_cnt = 0
                     creat_new_gs_cnt = creat_new_gs_cnt+1
@@ -3126,32 +2624,33 @@ class SLAM():
                         events_stream = BA_batch[-1]['events'].squeeze().to(self.device)
                         new_pcd = self.create_densify_points(cur_frame_id,
                                                             events_stream,
-                                                            SE3_to_se3(self.est_c2w_data[cur_frame_id-1][:3,:4]).cuda(), 
+                                                            SE3_to_se3(self.est_c2w_data[cur_frame_id-1][:3,:4]).cuda(),
                                                             SE3_to_se3(self.est_c2w_data[cur_frame_id][:3,:4]).cuda())
-                        # self.gs_model.add_new_points(new_pcd, 8.25)
-                        feature_dim = 32 if self.gs_cfg.app_opt else None
-                        print(f"============================= point num:{new_pcd.points.shape[0]} ===============================")
-                        if(new_pcd.points.shape[0]>50):
-                            new_gs = pcd_2_gs(
-                                points= new_pcd.points.detach(),
-                                init_opacity=self.gs_cfg.init_opa,
-                                init_scale=self.gs_cfg.init_scale,
-                                scene_scale=self.scene_scale,
-                                sh_degree=self.gs_cfg.sh_degree,
-                                feature_dim=feature_dim,
-                                device=self.device,
-                                )
-                            add_new_gs(self.splats, self.optimizers, new_gs)
-                            print("Number of New GS:", len(new_gs["means"]))
-                            print("Number of GS:", len(self.splats["means"]))
+                        if new_pcd is not None:
+                            feature_dim = 32 if self.gs_cfg.app_opt else None
+                            print(f"============================= point num:{new_pcd.points.shape[0]} ===============================")
+                            if(new_pcd.points.shape[0]>50):
+                                new_gs = pcd_2_gs(
+                                    points= new_pcd.points.detach(),
+                                    init_opacity=self.gs_cfg.init_opa,
+                                    init_scale=self.gs_cfg.init_scale,
+                                    scene_scale=self.scene_scale,
+                                    sh_degree=self.gs_cfg.sh_degree,
+                                    feature_dim=feature_dim,
+                                    device=self.device,
+                                    )
+                                add_new_gs(self.splats, self.optimizers, new_gs)
+                                print("Number of New GS:", len(new_gs["means"]))
+                                print("Number of GS:", len(self.splats["means"]))
+                            else:
+                                print("Not enough points to create a new GS, skipped.")
                         else:
-                            print("Not enough points to create a new GS, skipped.")
-                    
+                            print("Skipping Gaussian growth due to no valid points.")
                     sliding_window_sz = self.config["sliding_window_sz"]
                     traj_mode = 'linear'
                     seg_num_ = self.config["BA"]["incre_sampling_seg_num_expected"]
                     self.bundle_adjustment(BA_batch[-sliding_window_sz:], traj_mode, num_optim_steps_BA, seg_num_)
-                
+
                 if (i+1)>=20 and (i+1)%self.config["BA"]["global_BA_step"]==0:
                     print("******************************** global BA ********************************")
                     traj_mode = 'linear'
@@ -3165,7 +2664,7 @@ class SLAM():
                     self.bundle_adjustment(BA_batch, traj_mode, num_opti_steps_for_global_BA, seg_num_, _global_BA=True)
                     if refine_img_rendering_:
                         self.bundle_adjustment(BA_batch, traj_mode, num_opti_steps_for_global_BA, seg_num_, _opt_pose=False,_global_BA=True)
-                
+
         # global BA
         if self.config["global_BA"] and (not self.config["initOnly"]):
             print("******************************** global BA ********************************")
@@ -3178,9 +2677,9 @@ class SLAM():
             self.bundle_adjustment(BA_batch, traj_mode, num_opti_steps_for_final_global_BA, seg_num_, _global_BA=True)
             if refine_img_rendering_:
                 self.bundle_adjustment(BA_batch, traj_mode, num_opti_steps_for_final_global_BA, seg_num_, _opt_pose=False, _global_BA=True)
-        
+
         if self.config["evaluate_img"]:
-            # render ALL images 
+            # render ALL images
             with torch.no_grad():
                 if self.config["use_gt_pose_to_opt"]:
                     print("******* use gt pose to render images *******")
@@ -3188,7 +2687,7 @@ class SLAM():
                         c2w_ = self.dataset.original_gt_poses[tmp_idx_].reshape(-1, 4, 4).cuda()
                         render_pkg_ = self.rasterize_splats(camtoworlds=c2w_, render_mode="RGB")
                         event_img_ = render_pkg_["image"].detach().cpu().numpy()
-                        
+
                         event_img_ =  to8b(event_img_)
                         im_name = f"f{tmp_idx_}_{float(self.dataset.original_gt_poses_ts[tmp_idx_]):07.3f}s.jpg"
 
@@ -3197,7 +2696,7 @@ class SLAM():
                 else:
                     print("******* use interpolated pose to render images *******")
                     total_frame_num = len(self.dataset.val_img_idx)
-                    
+
                     cntl_knot_sorted_keys = sorted(list(self.ctrl_knot_ts_all.keys()))
                     cntl_knot_num = len(cntl_knot_sorted_keys)
                     active_ctrl_knot_ts = []
@@ -3205,34 +2704,24 @@ class SLAM():
                     for ii in range(cntl_knot_num):
                         active_ctrl_knot_ts.append(self.ctrl_knot_ts_all[cntl_knot_sorted_keys[ii]])
                         active_ctrl_knot_se3[ii] = self.ctrl_knot_se3_all[cntl_knot_sorted_keys[ii]]
-                    
+
                     for ii in range(total_frame_num):
                         idx_ = self.dataset.val_img_idx[ii]
                         ts = self.dataset.val_img_ts[ii]
                         T_SE3 = self.get_poses_lie(active_ctrl_knot_se3, active_ctrl_knot_ts, ts, mode="linear")
-                        
+
                         c2w_ = T_SE3.matrix().unsqueeze(0).cuda()  #[1, 4, 4]
                         render_pkg_ = self.rasterize_splats(camtoworlds=c2w_, render_mode="RGB")
                         event_img_ = render_pkg_["image"].detach().cpu().numpy()
-                        
+
                         event_img_ =  to8b(event_img_)
                         im_name = f"f{idx_}_{ts:07.3f}s.jpg"
                         save_path = os.path.join(self.config["data"]["output"], self.config["data"]["exp_name"], "img_eval/est")
                         imageio.imwrite(os.path.join(save_path, im_name), event_img_)
-                        
-                        # if self.config["render_tumvie_rgbCam_img"] and self.config["dataset"]=="tum_vie":
-                        #     # render rbg camera image
-                        #     img_rgbCam = self.render_with_gsplat(self.gs_model, T_se3, render_tumvie_rgb=True)['image']
-                        #     img_rgbCam = np.repeat(img_rgbCam.detach().cpu().numpy()[:, :, np.newaxis], repeats=3, axis=2)
-                        #     img_path = os.path.join(save_path, f"frame{idx_}_img_rgbCam_final.jpg")  
-                        #     imageio.imwrite(img_path, to8b(img_rgbCam))
-        
+
         print("================ finished ================")
 
     def depth_alignment(self, _depth_est, _depth_gs):
-        # _depth_est: [N]
-        # _depth_gs: [N]
-        # _depth_aligned = b*_depth_est+a, we need to estimate a and b
         assert _depth_est.shape == _depth_gs.shape
         N = _depth_est.shape[0]
         s = torch.tensor([0.0]).to(_depth_est.device)
@@ -3240,133 +2729,20 @@ class SLAM():
             s = s + (_depth_est[i]-_depth_est.mean())*(_depth_gs[i]-_depth_gs.mean())
         b = s/torch.sum((_depth_est-_depth_est.mean())**2)
         a = _depth_gs.mean() - b*_depth_est.mean()
-        
+
         _depth_aligned = b*_depth_est+a
         return _depth_aligned
-    
-    # def create_densify_points(self, _cur_frame_id, events_stream, T_se3_start, T_se3_end, num_new_pts=1000):
-    #     c2w_start = T_se3_start.Exp().matrix().unsqueeze(0).cuda()  #[1, 4, 4]
-    #     render_ev_start = self.rasterize_splats(camtoworlds=c2w_start, render_mode="RGB+ED")
-    #     c2w_end =  T_se3_end.Exp().matrix().unsqueeze(0).cuda()  #[1, 4, 4]
-    #     render_ev_end = self.rasterize_splats(camtoworlds=c2w_end, render_mode="RGB+ED")
-        
-    #     eps = 1e-5
-    #     syn_event_acc = torch.log(render_ev_end['image']**2.2+eps)-torch.log(render_ev_start['image']**2.2+eps)
-        
-    #     gt_event_map = self.post_process_event_image(events_stream)
 
-    #     # error_map = (gt_event_map - syn_event_acc).abs()
-    #     # pixel_uv_with_event = torch.where(error_map > 0.2)
-    #     # sampled_event_pixel_idx = torch.randperm(pixel_uv_with_event[0].shape[0])[:num_new_pts]
-    #     # indice_h = pixel_uv_with_event[0][sampled_event_pixel_idx]
-    #     # indice_w = pixel_uv_with_event[1][sampled_event_pixel_idx]
-        
-    #     create_densify_points_num = self.config["mapping"]["create_densify_points_num"]
-    #     densify_alpha_threshold = self.config["mapping"]["densify_alpha_threshold"]
-    #     # non-visibility mask
-    #     alpha_start = render_ev_end["alpha"].detach()
-    #     alpha_start = alpha_start[0][:,:,0]  # [H, W]
-    #     non_vis_mask = torch.where(alpha_start < densify_alpha_threshold)
-    #     sampled_event_pixel_idx = torch.randperm(non_vis_mask[0].shape[0])[:create_densify_points_num]
-    #     indice_h = non_vis_mask[0][sampled_event_pixel_idx].to(self.device)
-    #     indice_w = non_vis_mask[1][sampled_event_pixel_idx].to(self.device)
-
-    #     #
-    #     fx = self.dataset.fx
-    #     fy = self.dataset.fy
-    #     cx = self.dataset.cx
-    #     cy = self.dataset.cy
-    #     H = self.dataset.H
-    #     W = self.dataset.W
-
-    #     sampled_rays = get_camera_rays(H, W, fx, fy, cx, cy, type='OpenCV').to(self.device) 
-    #     sampled_rays = sampled_rays[indice_h, indice_w, :].to(T_se3_start.device)
-    #     depth_gs = render_ev_end['depth'][indice_h, indice_w].unsqueeze(-1)
-    #     depth_gs = depth_gs.detach()
-    #     depth_img_gs = render_ev_end['depth']
-    #     img_gs = render_ev_end['image'].detach().cpu().numpy()
-        
-    #     save_dir_path  = os.path.join(self.config["data"]["output"], self.config["data"]["exp_name"], "depth_for_new_gs")
-    #     depth_tmp = depth_img_gs.detach()
-    #     depth_tmp = depth_tmp.view(depth_tmp.shape[0], depth_tmp.shape[1], -1)
-    #     depth_img = apply_colormap(depth_tmp)
-    #     depth_img = depth_img.cpu().numpy()
-    #     if self.config["visualize_inter_img"]:
-    #         imageio.imwrite(os.path.join(save_dir_path, f"frame{_cur_frame_id}_gs_depth.png"), to8b(depth_img)) 
-        
-    #     if self.config["add_new_gs_from_estDepth"]:
-    #         print("&&&&&&&&&&&&&& creat new Gaussian Points from estimated depth map &&&&&&&&&&&&&&&&&&")
-    #         # estimate depth from the rendered image, using diffuser
-    #         from PIL import Image
-    #         from diffusers import DiffusionPipeline
-    #         from diffusers.utils import load_image
-    #         pipe = DiffusionPipeline.from_pretrained(
-    #                     # torch_dtype=torch.float16,                # (optional) Run with half-precision (16-bit float).
-    #                     local_files_only=True
-    #                 )
-    #         pipe.to("cuda")
-    #         # image: Image.Image = load_image(img_path)
-    #         image = Image.fromarray(to8b(img_gs))
-    #         pipeline_output = pipe(
-    #                                 image,                  # Input image.
-    #                                 # denoising_steps=30,     # (optional) Number of denoising steps of each inference pass. Default: 10.
-    #                                 # ensemble_size=10,       # (optional) Number of inference passes in the ensemble. Default: 10.
-    #                                 # processing_res=768,     # (optional) Maximum resolution of processing. If set to 0: will not resize at all. Defaults to 768.
-    #                                 # match_input_res=True,   # (optional) Resize depth prediction to match input resolution.
-    #                                 # batch_size=10,           # (optional) Inference batch size, no bigger than `num_ensemble`. If set to 0, the script will automatically decide the proper batch size. Defaults to 0.
-    #                                 # color_map="Spectral",   # (optional) Colormap used to colorize the depth map. Defaults to "Spectral". Set to `None` to skip colormap generation.
-    #                                 # show_progress_bar=True, # (optional) If true, will show progress bars of the inference progress.
-    #                             )
-    #         depth_img_est: np.ndarray = pipeline_output.depth_np  
-    #         # save the estimated images
-    #         depth_colored: Image.Image = pipeline_output.depth_colored      # Colorized prediction
-    #         imageio.imwrite(os.path.join(save_dir_path, f"frame{_cur_frame_id}_img.png"), to8b(img_gs)) 
-    #         depth_uint16 = (depth_img_est * 65535.0).astype(np.uint16)
-    #         Image.fromarray(depth_uint16).save(os.path.join(save_dir_path, f"frame{_cur_frame_id}_depth_map.png"), mode="I;16")
-    #         depth_colored.save(os.path.join(save_dir_path, f"frame{_cur_frame_id}_depth_colored.png"))
-    #         # 
-            
-    #         depth_est = torch.from_numpy(depth_img_est).cuda()[indice_h, indice_w].unsqueeze(-1)
-    #         depth_aligned = self.depth_alignment(depth_est, depth_gs)
-    #     else:
-    #         depth_aligned = depth_gs
-
-    #     # initialize points on a frontal parallel plane at infinity
-    #     # depth = 100
-    #     sampled_rays = (sampled_rays * depth_aligned).transpose(1,0).to(T_se3_start.device)
-
-    #     #
-    #     T_cam_to_wld = se3_to_SE3(T_se3_start)
-    #     sampled_rays = torch.matmul(T_cam_to_wld[:3, :3], sampled_rays) + T_cam_to_wld[:3, 3].unsqueeze(-1) 
-    #     points = sampled_rays.transpose(1, 0)
-
-    #     # colors
-    #     # colors = render_ev_start['image'][indice_h, indice_w].unsqueeze(-1).repeat(1, 3)
-    #     shs = torch.rand((points.shape[0], 3)) / 255.0
-
-    #     # normals
-    #     normals = torch.zeros_like(points)
-    #     normals[:, 2] = 1.
-
-    #     # create pcd
-    #     # pcd = BasicPointCloud(points=points, colors=colors, normals=normals)
-    #     pcd = BasicPointCloud(points=points, colors=SH2RGB(shs), normals=normals)
-
-    #     return pcd
-    #=========================================================================================================================#
     def create_densify_points(self, _cur_frame_id, events_stream, T_se3_start, T_se3_end, num_new_pts=1000):
-    
-        # 渲染起始和结束帧的图像、深度和 alpha
+
         c2w_start = T_se3_start.Exp().matrix().unsqueeze(0).cuda()  # [1, 4, 4]
         render_ev_start = self.rasterize_splats(camtoworlds=c2w_start, render_mode="RGB+ED")
         c2w_end = T_se3_end.Exp().matrix().unsqueeze(0).cuda()      # [1, 4, 4]
         render_ev_end = self.rasterize_splats(camtoworlds=c2w_end, render_mode="RGB+ED")
 
-        # 计算合成事件（用于误差图，但此处未直接使用）
         eps = 1e-5
         syn_event_acc = torch.log(render_ev_end['image']**2.2 + eps) - torch.log(render_ev_start['image']**2.2 + eps)
 
-        # 获取非可见性掩码（alpha 小于阈值的区域）
         densify_alpha_threshold = self.config["mapping"]["densify_alpha_threshold"]
         alpha_start = render_ev_end["alpha"].detach()
         alpha_start = alpha_start[0][:, :, 0]  # [H, W]
@@ -3376,7 +2752,6 @@ class SLAM():
         indice_h = non_vis_mask[0][sampled_event_pixel_idx].to(self.device)
         indice_w = non_vis_mask[1][sampled_event_pixel_idx].to(self.device)
 
-        # 相机内参
         fx = self.dataset.fx
         fy = self.dataset.fy
         cx = self.dataset.cx
@@ -3384,54 +2759,49 @@ class SLAM():
         H = self.dataset.H
         W = self.dataset.W
 
-        # 生成采样像素的射线方向
         sampled_rays = get_camera_rays(H, W, fx, fy, cx, cy, type='OpenCV').to(self.device)
         sampled_rays = sampled_rays[indice_h, indice_w, :].to(T_se3_start.device)
 
-        # 确保深度模型已加载
-        # if self.depth_model is None:
-
-        # # 从事件流估计深度图
-        # depth_est = self.estimate_depth_from_events(events_stream)  # [H, W] tensor on self.device
-
-        # # 采样估计深度
-        # depth_est_sampled = depth_est[indice_h, indice_w].unsqueeze(-1)  # [M, 1]
-
-        # # 从渲染结果中获取对应像素的深度
         depth_gs = render_ev_end['depth'][indice_h, indice_w].unsqueeze(-1)  # [M, 1]
         if self.config["add_new_gs_from_estDepth"]:
             print("Estimating depth for new Gaussians using DERD-Net...")
             if self.derdnet_model is None:
                 self.load_derdnet_model()
-            # 获取事件时间范围
             t_start = events_stream[:, 2].min()
             t_end = events_stream[:, 2].max()
             depth_map = self.estimate_depth_map_derdnet(events_stream, t_start, t_end)
             depth_est_sampled = depth_map[indice_h, indice_w].unsqueeze(-1)
-            # 对齐深度（尺度+偏移）
             depth_aligned = self.depth_alignment(depth_est_sampled, depth_gs)
+            if indice_h.numel() == 0:
+                print("No valid depth after alignment, skipping growth")
+                return None
         else:
             depth_est_sampled=depth_gs
-            
+            depth_aligned=depth_gs
+
         # ------------------------------------------------
 
-        # 将射线乘以深度得到相机坐标下的3D点
         sampled_points_cam = (sampled_rays * depth_aligned).transpose(1, 0)  # [3, M]
 
-        # 转换到世界坐标系
         T_cam_to_wld = se3_to_SE3(T_se3_start)  # [4, 4]
         points_wld = torch.matmul(T_cam_to_wld[:3, :3], sampled_points_cam) + T_cam_to_wld[:3, 3].unsqueeze(-1)
         points = points_wld.transpose(1, 0)  # [M, 3]
 
-        # 为点分配颜色（随机 SH 系数，或从渲染图像中获取）
-        # 这里使用随机颜色作为占位，实际可根据需要调整
         shs = torch.rand((points.shape[0], 3), device=self.device) / 255.0
 
-        # 法线（可设为垂直向上或从平面估计，这里设为简单值）
         normals = torch.zeros_like(points, device=self.device)
         normals[:, 2] = 1.0
 
-        # 创建点云对象
+        valid_mask = torch.isfinite(points).all(dim=1)
+        if not valid_mask.all():
+            print(f"[Densify] Filtering { (~valid_mask).sum().item() } invalid points")
+            points = points[valid_mask]
+            shs = shs[valid_mask]
+            normals = normals[valid_mask]
+        if points.shape[0] == 0:
+            print("[Densify] No valid points generated, skipping growth.")
+            return None
+
         from utils import BasicPointCloud, SH2RGB
         pcd = BasicPointCloud(points=points, colors=SH2RGB(shs), normals=normals)
 
@@ -3453,11 +2823,11 @@ class SLAM():
         else:
             x_window = events_stream[:, 0]
             y_window = events_stream[:, 1]
-            pol_window = events_stream[:, 3]  
+            pol_window = events_stream[:, 3]
             polarity_offset = self.config["polarity_offset"]
             pol_window = pol_window + polarity_offset  # offset for polarity
             assert pol_window.shape[0] > 0
-        
+
             # create indices for sparse tensor
             events_num = x_window.shape[0]
             indices= torch.cat([y_window.unsqueeze(0), x_window.unsqueeze(0), torch.arange(events_num).unsqueeze(0).to(events_stream.device)], dim=0)
@@ -3465,38 +2835,27 @@ class SLAM():
             events_map_sum = torch.sparse.sum(events_map_sparse, dim=-1)
 
             events_map = events_map_sum.to_dense()
-            
+
         threshold = self.config["event"]["threshold"]
         events_map =  events_map * threshold
         if self.config["event"]["clip"]:
             events_map = torch.clip(events_map, self.config["event"]["clip_min"], self.config["event"]["clip_max"])
-        
-        # #debug
-        # pos_event_mask = (events_map>0).float()
-        # neg_event_mask = (events_map<0).float()
-        # pos_event_avg = (events_map*pos_event_mask).sum()/pos_event_mask.sum()
-        # neg_event_avg = (events_map*neg_event_mask).sum()/neg_event_mask.sum()
-        # print(f"Events_map: min={events_map.min():.3f}, max={events_map.max():.3f}, mean={events_map.mean():.3f}, pos_event_avg={pos_event_avg:.3f}, neg_event_avg={neg_event_avg:.3f}")
 
-        return events_map    
+        return events_map
 
-if __name__ == '__main__':            
+if __name__ == '__main__':
     print('Start running...')
     parser = argparse.ArgumentParser(description='Arguments for running the NICE-SLAM/iMAP*.')
     parser.add_argument('--config', type=str, help='Path to config file.')
     parser.add_argument('--input_folder', type=str, help='input folder, this have higher priority, can overwrite the one in config file')
     parser.add_argument('--output', type=str, help='output folder, this have higher priority, can overwrite the one in config file')
-    
-    # lp = ModelParams(parser)
-    # op = OptimizationParams(parser)
-    # pparams_ = PipelineParams(parser)
 
     args = parser.parse_args()
 
     cfg = config.load_config(args.config)
     if args.output is not None:
         cfg['data']['output'] = args.output
-    
+
     print(f"\n ***************************************************")
     print(f" experiment name: {cfg['data']['exp_name']}")
     print(f" *************************************************** \n")
@@ -3521,11 +2880,9 @@ if __name__ == '__main__':
         os.makedirs(os.path.join(save_path, "img_eval/gt"))
     if not os.path.exists(os.path.join(save_path, "img_eval/est")):
         os.makedirs(os.path.join(save_path, "img_eval/est"))
-    # shutil.copy("coslam_blur.py", os.path.join(save_path, 'coslam_blur.py'))
-
     with open(os.path.join(save_path, 'config.json'),"w", encoding='utf-8') as f:
         f.write(json.dumps(cfg, indent=4))
-        
+
     # copy the config file to output directory!!!
     config_file_name = args.config.split("/")[-1]
     shutil.copy(args.config, os.path.join(save_path, config_file_name))

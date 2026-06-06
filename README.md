@@ -8,7 +8,6 @@ DERD-Net depth-prior path and removes unused or deprecated depth branches.
 
 - Event-only monocular 3DGS tracking and mapping.
 - DSI-based DERD-Net depth initialization and online depth consistency.
-- Configurable depth-error experiments for sensitivity analysis.
 - Environment-variable based dataset/model paths for reproducible runs.
 
 ## Path Setup
@@ -53,7 +52,7 @@ python main.py --config configs/SimuEvent/replica_office3.yaml
 Server setup files are included for reproducibility:
 
 - `FEATURIZE_SETUP.md`: Featurize setup and run instructions.
-- `requirements-featurize.txt`: runtime dependency overlay with `numpy==1.26.4`.
+- `requirements-featurize.txt`: Featurize dependency checklist; do not install blindly.
 - `environment.yml`: optional conda environment template.
 - `configs/runtime/featurize_env.example`: environment variable template.
 - `scripts/check_featurize_env.sh`: runtime/import/path checker.
@@ -61,26 +60,10 @@ Server setup files are included for reproducibility:
 
 ## DERD-Net Depth Error Experiment
 
-Depth perturbation is controlled by `depth_error_exp` in the config file.
-
-```yaml
-depth_error_exp:
-  enable: true
-  mode: gaussian_rel
-  sigma: 0.1
-  scale_factor: 1.0
-  dropout_ratio: 0.3
-```
-
-Available modes:
-
-- `gaussian_rel`: adds relative Gaussian noise to depth.
-- `scale`: multiplies depth by a constant scale factor.
-- `dropout`: randomly removes a fraction of valid depth pixels.
-- `none`: keeps depth unchanged.
-
-Use this experiment to report how DERD-Net depth errors affect final NVS and
-trajectory results.
+`DEPTH_ERROR_EXPERIMENT.md` describes the recommended sensitivity experiment
+for the paper. The current clean runtime follows the verified DERD-Net path used
+for the reproduced TUM-VIE runs; add an explicit perturbation hook before using
+that protocol as an executable config option.
 
 ## Notes
 

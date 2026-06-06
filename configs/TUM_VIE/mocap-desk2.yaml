@@ -17,7 +17,6 @@ num_events_window_for_BA: 1000000
 num_events_window_for_BA_random: 1500000
 pose_lr: 0.0001
 
-
 use_linLog: True
 save_model: False
 visualize_inter_img_in_Tracking_BA: True
@@ -40,10 +39,21 @@ use_mask_event_loss: True
 mask_event_loss_weight: 1.0
 
 # 0: use absolute pose; 1: use relative pose from individual frame;  2: fix the first pose and use relative pose from it
-use_relative_pose_to_opt: 0 
-
-# depth estimation
-depth_estimation_init: 1 #0: don't use depth; 1: estimate depth during initialization; 2: use pre-estimated depth
+use_relative_pose_to_opt: 0
+#depth estimation with derdnet
+depth_estimation_init: 1
+derdnet_model_path: "${DERDNET_MODEL_PATH}"
+derdnet_sub_radius_h: 3
+derdnet_sub_radius_w: 3
+derdnet_multi_pixel: false
+derdnet_num_depth_bins: 64
+derdnet_event_batch_size: 50000
+derdnet_pixel_batch_size: 1024
+derdnet_min_votes: 5
+derdnet_median_filter: False
+depth_scale: 1.0
+debug_save_dsi: True
+debug_save_depth: false
 only_track_event_area: False
 use_gt_pose_to_opt: False
 opt_pose: True
@@ -85,10 +95,16 @@ mapping:
   grow_grad2d: 0.0000001
   grow_scale3d: 0.01
   prune_scale3d: 0.1
-  
+
   use_median_filter: False
   use_white_balance_loss: True
-
+  depth_scale: 1.0
+  min_depth: 0.1
+  max_depth: 1.1
+  add_new_gs_from_estDepth: True
+  tr_loss_weight: 0.000005 # 0.000005
+  densify_alpha_threshold: 0.8
+  create_densify_points_num: 1000
 loss:
   norm_eve_loss: True
 
@@ -103,7 +119,7 @@ initialization:
   gaussian_init_sfm_mask: 2 # 0 for using depth map mask; 1 for using event map mask; 2 for both
   gaussian_num_sfm: 50000
   retain_pose: False
-
+  depth_scale: 1.0
 BA:
   incre_sampling_seg_num_expected: 100
   min_n_winsize: 500000
@@ -115,7 +131,12 @@ BA:
   refine_start_iter: 500
   refine_stop_iter: 1000
   refine_every: 250
-
+  depth_supervision: True
+  depth_loss_weight: 0.0001
+  depth_loss_type: 'l1'
+  depth_learn_scale: True
+  depth_scale_lr: 0.001
+  depth_scale: 1.0
 entropyloss:
   N_rand: 6144
   entropy_type: log2
@@ -169,7 +190,6 @@ cam:
   W: 240
   fx: 169.50404059859204
   fy: 179.58096603591352
-  cx: 136.0468660434908
   cy: 114.28206073946285
   png_depth_scale: False
   crop_edge: 10

@@ -1,7 +1,12 @@
 # Depth Estimation Error Experiment
 
-This note describes the experiment for checking how DERD-Net depth errors affect
-the final MEGS reconstruction.
+This note describes the recommended paper experiment for checking how DERD-Net
+depth errors affect the final MEGS reconstruction.
+
+The clean runtime in this repository keeps the verified DERD-Net behavior used
+for the reproduced TUM-VIE runs. The perturbation settings below are an
+experiment protocol. Add an explicit perturbation hook around the DERD-Net depth
+map before treating these YAML fields as executable options.
 
 ## Goal
 
@@ -13,7 +18,8 @@ then compares rendering quality and trajectory accuracy.
 ## Experiment Variables
 
 Use the same dataset sequence, random seed, and training schedule as the main
-experiment. Change only the `depth_error_exp` field in the YAML config.
+experiment. After adding a perturbation hook, change only the depth perturbation
+setting in the YAML config.
 
 ### Relative Gaussian Noise
 
