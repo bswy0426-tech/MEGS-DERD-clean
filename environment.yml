@@ -1,0 +1,29 @@
+name: megs-derd
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy=1.26.4
+  - pytorch
+  - torchvision
+  - pytorch-cuda=12.1
+  - pip:
+      - imageio
+      - imageio-ffmpeg
+      - opencv-python
+      - PyYAML
+      - tqdm
+      - matplotlib
+      - scipy
+      - scikit-image
+      - Pillow
+      - lpips
+      - h5py
+      - hdf5plugin
+      - pypose
+      - plyfile
+      - numba
+      - torchgeometry

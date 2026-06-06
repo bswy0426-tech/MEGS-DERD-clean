@@ -48,6 +48,17 @@ Replica:
 python main.py --config configs/SimuEvent/replica_office3.yaml
 ```
 
+## Environment Pack
+
+Server setup files are included for reproducibility:
+
+- `FEATURIZE_SETUP.md`: Featurize setup and run instructions.
+- `requirements-featurize.txt`: runtime dependency overlay with `numpy==1.26.4`.
+- `environment.yml`: optional conda environment template.
+- `configs/runtime/featurize_env.example`: environment variable template.
+- `scripts/check_featurize_env.sh`: runtime/import/path checker.
+- `scripts/run_tumvie.sh`: TUM-VIE launch helper.
+
 ## DERD-Net Depth Error Experiment
 
 Depth perturbation is controlled by `depth_error_exp` in the config file.

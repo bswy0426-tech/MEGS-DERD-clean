@@ -1,0 +1,23 @@
+# Featurize/runtime dependency overlay for MEGS-DERD.
+# Keep NumPy below 2 because the preinstalled PyTorch/CUDA stack may be
+# compiled against NumPy 1.x.
+numpy==1.26.4
+
+# Runtime utilities
+imageio
+imageio-ffmpeg
+opencv-python
+PyYAML
+tqdm
+matplotlib
+scipy
+scikit-image
+Pillow
+lpips
+h5py
+hdf5plugin
+
+# Geometry / optimization utilities
+plyfile
+numba
+torchgeometry

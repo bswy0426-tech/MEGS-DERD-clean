@@ -1,0 +1,7 @@
+# Example environment variables for Featurize.
+# Source this file before running experiments, or copy the exports into the
+# current terminal.
+
+export DERDNET_MODEL_PATH=/home/featurize/work/checkpoints/derdnet_indoor_depth_prior.pth
+export TUM_VIE_ROOT=/home/featurize/work/MEGS-main/data/tum_vie
+export REPLICA_EVENT_ROOT=/home/featurize/work/MEGS-main/data
