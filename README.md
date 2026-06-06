@@ -2,8 +2,7 @@
 
 This repository contains the cleaned MEGS code used for monocular event-based
 3D Gaussian Splatting with DERD-Net depth supervision. The repository keeps the
-DERD-Net depth-prior path and removes unused or deprecated depth branches such
-as E2Depth/Marigold-related code.
+DERD-Net depth-prior path and removes unused or deprecated depth branches.
 
 ## What Is Included
 
@@ -74,6 +73,6 @@ trajectory results.
 
 ## Notes
 
-- The code path is DERD-Net based. E2Depth is not required.
+- The code path is DERD-Net based.
 - Outputs, datasets, and pretrained weights are ignored by git.
 - The config loader expands environment variables in YAML files.
