@@ -64,4 +64,13 @@ if [ -n "${TUM_VIE_ROOT:-}" ]; then
   ls -lh "$TUM_VIE_ROOT" | head
 fi
 
+echo "===== gsplat CUDA Backend ====="
+python - <<'PY'
+from gsplat.cuda._backend import _C
+
+print("gsplat backend:", _C)
+if _C is None:
+    raise SystemExit("gsplat CUDA backend is not available. Source configs/runtime/featurize_env.example and scripts/setup_featurize_cuda.sh.")
+PY
+
 echo "Environment check finished."

@@ -52,11 +52,33 @@ python main.py --config configs/SimuEvent/replica_office3.yaml
 Server setup files are included for reproducibility:
 
 - `FEATURIZE_SETUP.md`: Featurize setup and run instructions.
-- `requirements-featurize.txt`: Featurize dependency checklist; do not install blindly.
+- `constraints-featurize.txt`: pinned dependency versions that keep NumPy below 2.
+- `requirements-featurize.txt`: Featurize dependency checklist.
 - `environment.yml`: optional conda environment template.
 - `configs/runtime/featurize_env.example`: environment variable template.
+- `scripts/install_featurize_deps.sh`: repair/install Python dependencies without upgrading NumPy to 2.x.
 - `scripts/check_featurize_env.sh`: runtime/import/path checker.
+- `scripts/setup_featurize_cuda.sh`: sourceable CUDA/gsplat include and linker setup.
 - `scripts/run_tumvie.sh`: TUM-VIE launch helper.
+
+On Featurize, the stable setup sequence is:
+
+```bash
+cd /home/featurize/work/MEGS-DERD-clean
+source /home/featurize/work/envs/megs-derd/bin/activate
+bash scripts/install_featurize_deps.sh
+source configs/runtime/featurize_env.example
+source scripts/setup_featurize_cuda.sh
+```
+
+Then verify the local CUDA backend:
+
+```bash
+python - <<'PY'
+from gsplat.cuda._backend import _C
+print("gsplat backend:", _C)
+PY
+```
 
 ## DERD-Net Depth Error Experiment
 
@@ -68,6 +90,9 @@ set to `true` in the YAML config.
 Example office3 depth-error runs:
 
 ```bash
+export DERDNET_MODEL_PATH=/home/featurize/work/checkpoints/derdnet_indoor_depth_prior.pth
+export REPLICA_EVENT_ROOT=/home/featurize/work/IncEventGS/data/event_replica
+
 python main.py --config configs/DepthError/replica_office3_clean.yaml
 python main.py --config configs/DepthError/replica_office3_noise005.yaml
 python main.py --config configs/DepthError/replica_office3_noise010.yaml

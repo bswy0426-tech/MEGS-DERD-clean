@@ -4,4 +4,37 @@
 
 export DERDNET_MODEL_PATH=/home/featurize/work/checkpoints/derdnet_indoor_depth_prior.pth
 export TUM_VIE_ROOT=/home/featurize/work/MEGS-main/data/tum_vie
-export REPLICA_EVENT_ROOT=/home/featurize/data/event_replica
+export REPLICA_EVENT_ROOT=/home/featurize/work/IncEventGS/data/event_replica
+
+# Keep user-site packages out of the virtual environment. This avoids mixing
+# ~/.local packages such as NumPy 2.x with the verified PyTorch runtime.
+export PYTHONNOUSERSITE=1
+
+# Featurize CUDA paths. These are intentionally discovered dynamically because
+# different images place CUDA headers in slightly different package folders.
+export CUDA_HOME=${CUDA_HOME:-/environment/miniconda3}
+export CUDA_RUNTIME_H=${CUDA_RUNTIME_H:-$(find /environment/miniconda3 /home/featurize/work/envs/megs-derd -type f -name cuda_runtime.h 2>/dev/null | head -1)}
+export THRUST_COMPLEX_H=${THRUST_COMPLEX_H:-$(find /environment/miniconda3 /home/featurize/work/envs/megs-derd -type f -path "*/thrust/complex.h" 2>/dev/null | head -1)}
+export CUDART_SO=${CUDART_SO:-$(find /environment/miniconda3 /home/featurize/work/envs/megs-derd -type f -name "libcudart.so*" 2>/dev/null | head -1)}
+
+if [ -n "${CUDA_RUNTIME_H:-}" ]; then
+  export CUDA_RUNTIME_INC=$(dirname "$CUDA_RUNTIME_H")
+fi
+
+if [ -n "${THRUST_COMPLEX_H:-}" ]; then
+  export CUDA_CCCL_INC=$(dirname "$(dirname "$THRUST_COMPLEX_H")")
+fi
+
+if [ -n "${CUDART_SO:-}" ]; then
+  mkdir -p /home/featurize/work/cuda_lib_links
+  ln -sf "$CUDART_SO" /home/featurize/work/cuda_lib_links/libcudart.so
+  export CUDA_LIB=/home/featurize/work/cuda_lib_links
+  export LD_LIBRARY_PATH="$CUDA_LIB:$(dirname "$CUDART_SO"):${LD_LIBRARY_PATH:-}"
+  export LIBRARY_PATH="$CUDA_LIB:${LIBRARY_PATH:-}"
+fi
+
+export PATH="$CUDA_HOME/bin:${PATH:-}"
+export CPATH="${CUDA_RUNTIME_INC:-}:${CUDA_CCCL_INC:-}:${CPATH:-}"
+export C_INCLUDE_PATH="${CUDA_RUNTIME_INC:-}:${CUDA_CCCL_INC:-}:${C_INCLUDE_PATH:-}"
+export CPLUS_INCLUDE_PATH="${CUDA_RUNTIME_INC:-}:${CUDA_CCCL_INC:-}:${CPLUS_INCLUDE_PATH:-}"
+export MAX_JOBS=${MAX_JOBS:-4}

@@ -1,0 +1,11 @@
+# Version constraints verified on the Featurize MEGS-DERD runtime.
+# Keep NumPy on 1.x because the installed PyTorch/CUDA stack is built against
+# NumPy 1.x. Installing unconstrained opencv/plyfile/scipy can otherwise pull
+# NumPy 2.x and break torch with "Numpy is not available".
+numpy==1.26.4
+scipy==1.11.4
+scikit-learn==1.3.2
+scikit-image==0.22.0
+numba==0.59.1
+opencv-python-headless==4.8.1.78
+plyfile==1.0.3

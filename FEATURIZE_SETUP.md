@@ -13,41 +13,39 @@ cd MEGS-DERD-clean
 If the repository is private, use a GitHub token or temporarily make the
 repository public before cloning.
 
-## 2. Check Runtime Dependencies
+## 2. Repair Runtime Dependencies
 
 Use the existing Featurize Python/PyTorch runtime when possible. Do not blindly
 run a full requirements installation on a working image, because pip may replace
 the preinstalled PyTorch/CUDA stack.
+
+The verified repair command is:
+
+```bash
+source /home/featurize/work/envs/megs-derd/bin/activate
+bash scripts/install_featurize_deps.sh
+```
+
+This script pins NumPy to `1.26.4`. Do not install unconstrained latest
+`opencv-python-headless`, `plyfile`, `scipy`, or `numba`, because pip may pull
+NumPy 2.x and break PyTorch with `RuntimeError: Numpy is not available`.
+
+After repair, check the runtime:
 
 ```bash
 python -c "import numpy, torch; print('numpy', numpy.__version__); print('torch', torch.__version__, torch.cuda.is_available())"
 bash scripts/check_featurize_env.sh
 ```
 
-If a package is missing, install only that package. Examples:
+If NumPy was accidentally upgraded to 2.x, run the repair script again instead
+of installing packages one by one:
 
 ```bash
-python -m pip install --user h5py hdf5plugin
-python -m pip install --user numba
-python -m pip install --user trimesh
+bash scripts/install_featurize_deps.sh
 ```
 
-If `pypose` is missing, install it without dependencies so pip does not replace
-torch:
-
-```bash
-python -m pip install --user --no-deps pypose
-```
-
-If NumPy was accidentally upgraded to 2.x and PyTorch starts warning about
-compiled modules, downgrade NumPy only:
-
-```bash
-python -m pip install --user --force-reinstall "numpy==1.26.4"
-```
-
-`requirements-featurize.txt` is a reference checklist, not the default install
-command.
+`constraints-featurize.txt` stores the pinned versions. `requirements-featurize.txt`
+is a checklist and should be used with `-c constraints-featurize.txt` if needed.
 
 ## 3. Prepare Checkpoint and Data Paths
 
@@ -70,7 +68,7 @@ export TUM_VIE_ROOT=/home/featurize/work/MEGS-main/data/tum_vie
 For Replica experiments, also set:
 
 ```bash
-export REPLICA_EVENT_ROOT=/home/featurize/data/event_replica
+export REPLICA_EVENT_ROOT=/home/featurize/work/IncEventGS/data/event_replica
 ```
 
 The same exports are stored in:
@@ -106,9 +104,11 @@ Expected checks:
 ## 5. Prepare gsplat CUDA Backend
 
 The server must compile the local `gsplat` CUDA extension before training. If
-`gsplat: No CUDA toolkit found` appears, source the helper script:
+`gsplat: No CUDA toolkit found`, `cuda_runtime.h` missing, `thrust/complex.h`
+missing, or `cannot find -lcudart` appears, source the helper script:
 
 ```bash
+source configs/runtime/featurize_env.example
 source scripts/setup_featurize_cuda.sh
 ```
 
@@ -122,6 +122,8 @@ PY
 ```
 
 Expected output should point to a compiled `gsplat_cuda.so` file, not `None`.
+After this succeeds once, the compiled backend is cached under
+`~/.cache/torch_extensions/py311_cu121/gsplat_cuda/`.
 
 ## 6. Run TUM-VIE
 
@@ -147,5 +149,4 @@ corresponding config.
 
 See `DEPTH_ERROR_EXPERIMENT.md` for the recommended table and perturbation
 protocol. The clean runtime keeps the verified DERD-Net behavior unchanged, so
-add an explicit perturbation hook before treating those settings as executable
-config options.
+the perturbation settings are opt-in through `configs/DepthError/*.yaml`.

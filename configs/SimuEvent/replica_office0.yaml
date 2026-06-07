@@ -60,9 +60,9 @@ eval_end_idx: 119
 eval_step_size: 2
 
 data:
-  datadir: ${REPLICA_EVENT_ROOT}/office3
+  datadir: ${REPLICA_EVENT_ROOT}/office0
   scene: None
-  output: output/final/office3_ablation_depth0.1
+  output: output/final/office0
   exp_name: demo
   trainskip: 1
   downsample_factor: 1
