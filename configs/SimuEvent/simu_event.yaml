@@ -1,6 +1,5 @@
 dataset: 'simu_event'
 
-# sensitive parameters
 num_opti_steps_for_depthEst_init: 3501
 num_opti_steps_for_init: 3501
 num_opti_steps_for_tracking: 201
@@ -55,20 +54,6 @@ mask_event_loss_weight: 1.0
 use_linLog: True
 seprate_event_noevent_loss: False
 
-# DERD-Net depth prior. Set DERDNET_MODEL_PATH in the shell before running.
-depth_estimation_init: 1
-derdnet_model_path: ${DERDNET_MODEL_PATH}
-derdnet_sub_radius_h: 3
-derdnet_sub_radius_w: 3
-derdnet_multi_pixel: false
-derdnet_num_depth_bins: 64
-derdnet_event_batch_size: 50000
-derdnet_pixel_batch_size: 1024
-derdnet_min_votes: 5
-derdnet_median_filter: false
-debug_save_dsi: false
-debug_save_depth: false
-
 data:
   downsample: 1
   sc_factor: 1
@@ -78,7 +63,6 @@ data:
 
 mapping:
   bounding_size: 7.0 # very sensitive
-  # densification
   prune_opa: 0.1 # GSs with opacity below this value will be pruned
   refine_start_iter: 500 # Start refining GSs after this iteration
   refine_every: 250 # Refine GSs every this steps
@@ -100,7 +84,7 @@ mapping:
   min_depth: 0.1
   max_depth: 1.1
   tr_loss_weight: 0.0 # 0.000005
-  
+
   sample: 2048
   first_mesh: True
   iters: 10
@@ -223,7 +207,7 @@ BA:
   refine_start_iter: 500
   refine_stop_iter: 900
   refine_every: 200
-  
+
 initialization:
   num_frames_for_init: 100  # use how many frames event data in the initial
   incre_sampling_seg_num_expected: 100
@@ -232,7 +216,7 @@ initialization:
   training_batch_size: 200 #depends your GPU memory size
   visualize_every_iter: 100
   visualize_intermediate_img: False
-  gaussian_init_sfm_mask: 0 # 0 for using depth map mask; 1 for using event map mask; 
+  gaussian_init_sfm_mask: 0 # 0 for using depth map mask; 1 for using event map mask;
   gaussian_num_sfm: 30000
   retain_pose: True
 

@@ -17,9 +17,9 @@ Set these paths before running experiments.
 PowerShell:
 
 ```powershell
-$env:DERDNET_MODEL_PATH="D:\path\to\derdnet_indoor_depth_model.pth"
-$env:TUM_VIE_ROOT="D:\path\to\TUM-VIE"
-$env:REPLICA_EVENT_ROOT="D:\path\to\ReplicaEvent"
+$env:DERDNET_MODEL_PATH="<path-to>\derdnet_indoor_depth_model.pth"
+$env:TUM_VIE_ROOT="<path-to>\TUM-VIE"
+$env:REPLICA_EVENT_ROOT="<path-to>\ReplicaEvent"
 ```
 
 Bash:

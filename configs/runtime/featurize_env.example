@@ -4,4 +4,4 @@
 
 export DERDNET_MODEL_PATH=/home/featurize/work/checkpoints/derdnet_indoor_depth_prior.pth
 export TUM_VIE_ROOT=/home/featurize/work/MEGS-main/data/tum_vie
-export REPLICA_EVENT_ROOT=/home/featurize/work/MEGS-main/data
+export REPLICA_EVENT_ROOT=/home/featurize/data/event_replica

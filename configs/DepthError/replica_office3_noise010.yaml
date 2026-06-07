@@ -1,6 +1,7 @@
 inherit_from: configs/SimuEvent/replica_office3.yaml
 
 data:
+  datadir: ${REPLICA_EVENT_ROOT}/office3
   output: output/depth_error/office3_noise010
   exp_name: gaussian_rel_010
 

@@ -70,7 +70,7 @@ export TUM_VIE_ROOT=/home/featurize/work/MEGS-main/data/tum_vie
 For Replica experiments, also set:
 
 ```bash
-export REPLICA_EVENT_ROOT=/home/featurize/work/MEGS-main/data
+export REPLICA_EVENT_ROOT=/home/featurize/data/event_replica
 ```
 
 The same exports are stored in:
