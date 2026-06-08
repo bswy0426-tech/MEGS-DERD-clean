@@ -96,9 +96,8 @@ export REPLICA_EVENT_ROOT=/home/featurize/work/IncEventGS/data/event_replica
 python main.py --config configs/DepthError/replica_office3_clean.yaml
 python main.py --config configs/DepthError/replica_office3_noise005.yaml
 python main.py --config configs/DepthError/replica_office3_noise010.yaml
-python main.py --config configs/DepthError/replica_office3_scale090.yaml
-python main.py --config configs/DepthError/replica_office3_scale110.yaml
-python main.py --config configs/DepthError/replica_office3_dropout030.yaml
+python main.py --config configs/DepthError/replica_office3_noise020.yaml
+python main.py --config configs/DepthError/replica_office3_noise050.yaml
 ```
 
 ## Notes

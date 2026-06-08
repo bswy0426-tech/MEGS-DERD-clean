@@ -26,10 +26,12 @@ Ready-to-run office3 configs are provided under `configs/DepthError/`:
 python main.py --config configs/DepthError/replica_office3_clean.yaml
 python main.py --config configs/DepthError/replica_office3_noise005.yaml
 python main.py --config configs/DepthError/replica_office3_noise010.yaml
-python main.py --config configs/DepthError/replica_office3_scale090.yaml
-python main.py --config configs/DepthError/replica_office3_scale110.yaml
-python main.py --config configs/DepthError/replica_office3_dropout030.yaml
+python main.py --config configs/DepthError/replica_office3_noise020.yaml
+python main.py --config configs/DepthError/replica_office3_noise050.yaml
 ```
+
+Scale-bias and dropout configs are also available, but they are optional and
+are not part of the current Gaussian-noise-only run plan.
 
 ### Relative Gaussian Noise
 
@@ -40,7 +42,7 @@ depth_error_exp:
   sigma: 0.05
 ```
 
-Run several levels, for example `0.05`, `0.10`, and `0.20`.
+Run several levels, for example `0.05`, `0.10`, `0.20`, and `0.50`.
 
 ### Scale Bias
 
@@ -75,9 +77,10 @@ Report PSNR, SSIM, LPIPS, and ATE.
 | Gaussian noise 5% |  |  |  |  |
 | Gaussian noise 10% |  |  |  |  |
 | Gaussian noise 20% |  |  |  |  |
-| Scale 0.90 |  |  |  |  |
-| Scale 1.10 |  |  |  |  |
-| Dropout 30% |  |  |  |  |
+| Gaussian noise 50% |  |  |  |  |
+| Scale 0.90 optional |  |  |  |  |
+| Scale 1.10 optional |  |  |  |  |
+| Dropout 30% optional |  |  |  |  |
 
 ## Paper Wording
 
